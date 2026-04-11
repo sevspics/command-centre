@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
 <title>SEV COMMAND CENTRE</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -94,6 +94,9 @@ button:hover { opacity: 0.85; }
 @media (max-width: 500px) {
   .grid-4 { grid-template-columns: 1fr 1fr; }
   .grid-2 { grid-template-columns: 1fr; }
+  input, textarea, select { font-size: 16px !important; }
+  .tabs { display: grid; grid-template-columns: repeat(5, 1fr); overflow-x: visible; }
+  .tab { text-align: center; padding: 8px 4px; font-size: 11px; }
 }
 .lock-screen { position:fixed;top:0;left:0;right:0;bottom:0;background:var(--bg);z-index:1000;display:flex;align-items:center;justify-content:center; }
 .lock-screen.hidden { display:none !important; }
@@ -179,10 +182,11 @@ const REVIEW_ITEMS = [
   "Update opportunity stages and notes",
 ];
 const TAB_LIST = [
-  { id: "dashboard", label: "HQ" }, { id: "opportunities", label: "Deals" },
+  { id: "dashboard", label: "HQ" }, { id: "projects", label: "Projects" }, { id: "opportunities", label: "Deals" },
   { id: "sessions", label: "Sessions" }, { id: "commissions", label: "Commissions" },
   { id: "actions", label: "Actions" }, { id: "habits", label: "Habits" },
-  { id: "inbox", label: "Inbox" }, { id: "review", label: "Review" }, { id: "history", label: "History" },
+  { id: "inbox", label: "Inbox" }, { id: "someday", label: "Someday" }, { id: "review", label: "Review" },
+  { id: "debrief", label: "Debrief" }, { id: "history", label: "History" },
 ];
 
 // ===== STATE =====
@@ -195,13 +199,16 @@ function defaultState() {
       { id: "raswa", name: "RASWA 2026", stage: 1, notes: "127K views proof. Proposal delivered. Follow up.", monthlyValue: 5000, type: "deal" },
       { id: "goyojo", name: "GOYOJO Partnership", stage: 1, notes: "Tiers $2,750-$18K/mo + $12.5K China trip.", monthlyValue: 5500, type: "deal" },
       { id: "sabine-brandon", name: "Sabine x Brandon Dungeon", stage: 1, notes: "$4,600+GST design fees. Sabine's project.", monthlyValue: 0, type: "deal" },
-      { id: "talktosev", name: "@talktosev Launch", stage: 0, notes: "Account creation, bio, Mitchell testimonial, lead magnet.", monthlyValue: 0, type: "project" },
-      { id: "bts-exit", name: "BTS Exit", stage: 2, notes: "Clean separation before EOFY. Hursh advised.", monthlyValue: 0, type: "project" },
-      { id: "ghl-brandon", name: "GoHighLevel Build (Brandon)", stage: 0, notes: "Landing page + VSL from session 2.", monthlyValue: 0, type: "project" },
       { id: "daecian", name: "Daecian (Retainer)", stage: 5, notes: "Proof-of-concept retainer.", monthlyValue: 2500, type: "client" },
       { id: "living-oceans", name: "Living Oceans", stage: 5, notes: "Active client.", monthlyValue: 0, type: "client" },
       { id: "jits-ai", name: "Jits AI", stage: 5, notes: "Active client.", monthlyValue: 0, type: "client" },
       { id: "ben-macca", name: "Ben Macca (Pro Bono)", stage: 5, notes: "Pro bono.", monthlyValue: 0, type: "pro-bono" },
+    ],
+    projects: [
+      { id: "talktosev", name: "@talktosev Launch", category: "personal", notes: "Account creation, bio, Mitchell testimonial, lead magnet.", updates: [] },
+      { id: "bts-exit", name: "BTS Exit", category: "personal", notes: "Clean separation before EOFY. Hursh advised.", updates: [] },
+      { id: "ghl-brandon", name: "GoHighLevel Build (Brandon)", category: "professional", notes: "Landing page + VSL from session 2.", monthlyValue: 0, updates: [] },
+      { id: "sevspics", name: "@sevspics Brand", category: "personal", notes: "Personal brand development.", updates: [] },
     ],
     weeklyActions: {}, habits: [
       { id: "h1", name: "Outreach calls/messages", target: 5, icon: "phone" },
@@ -214,6 +221,7 @@ function defaultState() {
     habitLog: {}, inbox: [], weeklyReview: {}, waitingFor: [], somedayMaybe: [],
     sessions: [{ id: "abbey", name: "Abbey", package: "4-pack", price: 1200, sessionsTotal: 4, sessionsUsed: 3, notes: "3rd call done. 1 session remaining." }],
     commissions: [],
+    debriefs: [],
   };
 }
 
@@ -242,15 +250,22 @@ function saveHistory() {
   }, 500);
 }
 function loadLocal() {
-  try { const s = localStorage.getItem(STORAGE_KEY); if (s) { state = JSON.parse(s); if (!state.sessions) state.sessions = defaultState().sessions; if (!state.commissions) state.commissions = []; } else state = defaultState(); } catch(e) { state = defaultState(); }
+  try { const s = localStorage.getItem(STORAGE_KEY); if (s) { state = JSON.parse(s); if (!state.sessions) state.sessions = defaultState().sessions; if (!state.commissions) state.commissions = []; if (!state.projects) state.projects = []; if (!state.debriefs) state.debriefs = []; } else state = defaultState(); } catch(e) { state = defaultState(); }
   try { const h = localStorage.getItem(HISTORY_KEY); if (h) history = JSON.parse(h); } catch(e) {}
 }
 function fixArrays(obj) {
-  const keys = ['opportunities','inbox','habits','sessions','commissions','waitingFor','somedayMaybe'];
+  const keys = ['opportunities','inbox','habits','sessions','commissions','waitingFor','somedayMaybe','projects','debriefs'];
   keys.forEach(k => { if (obj[k] && !Array.isArray(obj[k])) obj[k] = Object.values(obj[k]); });
   if (obj.weeklyActions) {
     Object.keys(obj.weeklyActions).forEach(k => {
       if (obj.weeklyActions[k] && !Array.isArray(obj.weeklyActions[k])) obj.weeklyActions[k] = Object.values(obj.weeklyActions[k]);
+    });
+  }
+  // Fix updates arrays inside projects
+  if (obj.projects && Array.isArray(obj.projects)) {
+    obj.projects.forEach(p => {
+      if (p.updates && !Array.isArray(p.updates)) p.updates = Object.values(p.updates);
+      if (!p.updates) p.updates = [];
     });
   }
 }
@@ -274,6 +289,8 @@ async function loadFromFirebase() {
     if (!state.opportunities) state.opportunities = def.opportunities;
     if (!state.waitingFor) state.waitingFor = [];
     if (!state.somedayMaybe) state.somedayMaybe = [];
+    if (!state.projects) state.projects = def.projects;
+    if (!state.debriefs) state.debriefs = [];
     fixArrays(state);
   }
   if (fbHist) {
@@ -311,9 +328,10 @@ function trackStreak() {
 }
 
 function addXP(amount, label) {
-  state.xp += amount; trackStreak(); save();
+  state.xp = Math.max(0, state.xp + amount); trackStreak(); save();
   const el = document.getElementById("xp-popup");
-  el.textContent = "+" + amount + " XP - " + label;
+  const sign = amount >= 0 ? "+" : "";
+  el.textContent = sign + amount + " XP - " + label;
   el.classList.remove("hidden");
   setTimeout(() => el.classList.add("hidden"), 1500);
   render();
@@ -333,6 +351,7 @@ function computed() {
   if (!state.habitLog) state.habitLog = {};
   if (!state.weeklyReview) state.weeklyReview = {};
   if (!state.habits) state.habits = defaultState().habits;
+  if (!state.projects) state.projects = [];
   const allActs = []; Object.entries(state.weeklyActions).forEach(([oid,acts]) => { if (acts) (Array.isArray(acts)?acts:Object.values(acts)).forEach(a => allActs.push({...a, oppId: oid})); });
   const doneActs = allActs.filter(a=>a.done).length;
   const habDone = Object.values(state.habitLog).reduce((s,v)=>s+v,0);
@@ -341,11 +360,13 @@ function computed() {
   const score = Math.round(((doneActs/Math.max(allActs.length,1))*40)+((habDone/Math.max(habTarget,1))*30)+((revDone/REVIEW_ITEMS.length)*30));
   const confirmed = state.opportunities.filter(o=>o.stage>=4).reduce((s,o)=>s+(o.monthlyValue||0),0);
   const pipeline = state.opportunities.filter(o=>o.stage>=1&&o.stage<4).reduce((s,o)=>s+(o.monthlyValue||0),0);
+  const projectsRevenue = state.projects.filter(p=>p.category==="professional").reduce((s,p)=>s+(p.monthlyValue||0),0);
   const commBuild = (state.commissions||[]).reduce((s,c)=>s+((c.buildCost*c.myShare)/100),0);
   const commMonthly = (state.commissions||[]).filter(c=>c.status==="active").reduce((s,c)=>s+((c.monthlyRetainer*c.retainerShare)/100),0);
   const sesRev = (state.sessions||[]).reduce((s,x)=>s+x.price,0);
   const sesLeft = (state.sessions||[]).reduce((s,x)=>s+(x.sessionsTotal-x.sessionsUsed),0);
-  return { allActs, doneActs, habDone, habTarget, revDone, score, confirmed, pipeline, commBuild, commMonthly, sesRev, sesLeft };
+  const activeProjects = state.projects.length;
+  return { allActs, doneActs, habDone, habTarget, revDone, score, confirmed, pipeline, projectsRevenue, commBuild, commMonthly, sesRev, sesLeft, activeProjects };
 }
 
 // ===== RENDER =====
@@ -368,13 +389,16 @@ function render() {
   const el = document.getElementById("content");
   switch(currentTab) {
     case "dashboard": el.innerHTML = renderDashboard(c, lv, nlv); break;
+    case "projects": el.innerHTML = renderProjects(); break;
     case "opportunities": el.innerHTML = renderOpportunities(); break;
     case "sessions": el.innerHTML = renderSessions(c); break;
     case "commissions": el.innerHTML = renderCommissions(c); break;
     case "actions": el.innerHTML = renderActions(c); break;
     case "habits": el.innerHTML = renderHabits(); break;
     case "inbox": el.innerHTML = renderInbox(); break;
+    case "someday": el.innerHTML = renderSomeday(); break;
     case "review": el.innerHTML = renderReview(c); break;
+    case "debrief": el.innerHTML = renderDebrief(); break;
     case "history": el.innerHTML = renderHistory(); break;
   }
 }
@@ -398,7 +422,7 @@ function renderDashboard(c, lv, nlv) {
       </div>
     </div>
     <div class="grid-stats">
-      ${[{l:"Confirmed /mo",v:"$"+c.confirmed.toLocaleString(),c:"var(--green)"},{l:"Pipeline /mo",v:"$"+c.pipeline.toLocaleString(),c:"var(--yellow)"},{l:"Commissions /mo",v:"$"+Math.round(c.commMonthly).toLocaleString(),c:"var(--purple)"},{l:"Sessions Left",v:c.sesLeft,c:"var(--cyan)"},{l:"Actions",v:c.doneActs+"/"+c.allActs.length,c:"var(--gold)"},{l:"Inbox",v:state.inbox.length,c:state.inbox.length>5?"var(--red)":"var(--green)"}].map(s=>'<div class="card stat-card"><div class="stat-val" style="color:'+s.c+'">'+s.v+'</div><div class="stat-label">'+s.l+'</div></div>').join("")}
+      ${[{l:"Confirmed /mo",v:"$"+c.confirmed.toLocaleString(),c:"var(--green)"},{l:"Pipeline /mo",v:"$"+c.pipeline.toLocaleString(),c:"var(--yellow)"},{l:"Projects Rev /mo",v:"$"+c.projectsRevenue.toLocaleString(),c:"var(--cyan)"},{l:"Active Projects",v:c.activeProjects,c:"var(--cyan)"},{l:"Commissions /mo",v:"$"+Math.round(c.commMonthly).toLocaleString(),c:"var(--purple)"},{l:"Sessions Left",v:c.sesLeft,c:"var(--cyan)"},{l:"Actions",v:c.doneActs+"/"+c.allActs.length,c:"var(--gold)"},{l:"Inbox",v:state.inbox.length,c:state.inbox.length>5?"var(--red)":"var(--green)"}].map(s=>'<div class="card stat-card"><div class="stat-val" style="color:'+s.c+'">'+s.v+'</div><div class="stat-label">'+s.l+'</div></div>').join("")}
     </div>
     <div class="card">
       <div class="label">Quick Capture (GTD Inbox)</div>
@@ -423,10 +447,132 @@ function dashCapture() {
   el.value = ""; trackStreak(); save(); render();
 }
 
-// ===== OPPORTUNITIES =====
+// ===== PROJECTS =====
+function renderProjects() {
+  if (!state.projects) state.projects = [];
+  const professional = state.projects.filter(p => p.category === "professional");
+  const personal = state.projects.filter(p => p.category === "personal");
+
+  let h = '<div class="flex-between mb-12"><h3>Projects</h3><button class="btn" onclick="document.getElementById(\'add-proj\').classList.toggle(\'hidden\')">+ Add Project</button></div>';
+
+  // Add project form
+  h += '<div id="add-proj" class="card hidden" style="border-color:var(--gold-dim)">';
+  h += '<div class="flex gap-8 mb-8"><select class="select flex-1" id="proj-cat"><option value="personal">Personal</option><option value="professional">Professional</option></select></div>';
+  h += '<input class="input mb-8" id="proj-name" placeholder="Project name">';
+  h += '<textarea class="input mb-8" id="proj-notes" placeholder="Notes" rows="2"></textarea>';
+  h += '<div id="proj-val-wrap" class="mb-8 hidden"><input class="input" id="proj-val" type="number" placeholder="$/mo (revenue)"></div>';
+  h += '<button class="btn" onclick="addProject()">Add Project</button></div>';
+
+  // Professional projects
+  if (professional.length) {
+    h += '<div class="mb-16"><div class="label" style="color:var(--green)">Professional Projects (Revenue-generating)</div>';
+    professional.forEach(proj => {
+      h += renderProjectCard(proj, "var(--green)");
+    });
+    h += '</div>';
+  }
+
+  // Personal projects
+  if (personal.length) {
+    h += '<div class="mb-16"><div class="label" style="color:var(--cyan)">Personal Projects (Brands & Side Projects)</div>';
+    personal.forEach(proj => {
+      h += renderProjectCard(proj, "var(--cyan)");
+    });
+    h += '</div>';
+  }
+
+  if (!professional.length && !personal.length) {
+    h += '<div class="text-center dim" style="padding:40px">No projects yet. Add your first above.</div>';
+  }
+
+  return h;
+}
+
+function renderProjectCard(proj, borderColor) {
+  let h = '<div class="card" style="border-left:3px solid '+borderColor+'">';
+  h += '<div class="flex-between mb-4"><div><span style="font-weight:600">'+esc(proj.name)+'</span>'+tagHTML(proj.category, borderColor)+'</div>';
+  if (proj.category === "professional" && proj.monthlyValue > 0) {
+    h += '<span class="gold" style="font-weight:600">$'+proj.monthlyValue.toLocaleString()+'/mo</span>';
+  }
+  h += '</div>';
+  if (proj.notes) h += '<div class="dim mb-8" style="font-size:12px">'+esc(proj.notes)+'</div>';
+
+  // Updates log toggle
+  const updates = proj.updates || [];
+  h += '<div class="flex gap-8 mb-8"><button class="btn-ghost btn-sm" onclick="toggleProjectUpdates(\''+proj.id+'\')">Updates ('+updates.length+')</button>';
+  h += '<button class="btn-ghost btn-sm" onclick="showAddUpdate(\''+proj.id+'\')">+ Add Update</button>';
+  h += '<button class="btn-ghost btn-sm" onclick="editProjectNotes(\''+proj.id+'\')">Edit</button>';
+  h += '<button class="btn-ghost btn-sm btn-danger" onclick="removeProject(\''+proj.id+'\')">Remove</button></div>';
+
+  // Inline add update input
+  h += '<div id="add-update-'+proj.id+'" class="hidden mb-8"><div class="flex gap-8"><input class="input flex-1" id="update-text-'+proj.id+'" placeholder="What happened?" onkeydown="if(event.key===\'Enter\')addProjectUpdate(\''+proj.id+'\')"><button class="btn btn-sm" onclick="addProjectUpdate(\''+proj.id+'\')">Save</button></div></div>';
+
+  // Updates list (collapsible)
+  h += '<div id="updates-'+proj.id+'" class="hidden">';
+  if (updates.length) {
+    updates.slice().reverse().forEach(u => {
+      h += '<div class="section-divider" style="padding:6px 0"><div class="dim" style="font-size:10px">'+fmtDate(u.date)+'</div><div style="font-size:13px">'+esc(u.text)+'</div></div>';
+    });
+  } else {
+    h += '<div class="dim" style="font-size:12px">No updates yet.</div>';
+  }
+  h += '</div></div>';
+  return h;
+}
+
+function toggleProjectUpdates(id) {
+  const el = document.getElementById("updates-"+id);
+  if (el) el.classList.toggle("hidden");
+}
+function showAddUpdate(id) {
+  const el = document.getElementById("add-update-"+id);
+  if (el) el.classList.toggle("hidden");
+}
+function addProjectUpdate(id) {
+  const input = document.getElementById("update-text-"+id);
+  if (!input || !input.value.trim()) return;
+  const proj = state.projects.find(p => p.id === id);
+  if (!proj) return;
+  if (!proj.updates) proj.updates = [];
+  proj.updates.push({ date: new Date().toISOString(), text: input.value.trim() });
+  save(); render();
+}
+function addProject() {
+  const name = document.getElementById("proj-name").value.trim();
+  if (!name) return;
+  const cat = document.getElementById("proj-cat").value;
+  const notes = document.getElementById("proj-notes").value;
+  const val = document.getElementById("proj-val").value;
+  const proj = { id: uid(), name: name, category: cat, notes: notes, updates: [] };
+  if (cat === "professional") proj.monthlyValue = +(val || 0);
+  state.projects.push(proj);
+  save(); render();
+}
+function editProjectNotes(id) {
+  const proj = state.projects.find(p => p.id === id);
+  if (!proj) return;
+  const n = prompt("Notes:", proj.notes);
+  if (n !== null) { proj.notes = n; save(); render(); }
+}
+function removeProject(id) {
+  if (!confirm("Remove this project?")) return;
+  state.projects = state.projects.filter(p => p.id !== id);
+  save(); render();
+}
+// Toggle $/mo field visibility based on category selection
+function projCatChange() {
+  const cat = document.getElementById("proj-cat").value;
+  const wrap = document.getElementById("proj-val-wrap");
+  if (wrap) {
+    if (cat === "professional") wrap.classList.remove("hidden");
+    else wrap.classList.add("hidden");
+  }
+}
+
+// ===== OPPORTUNITIES (DEALS) =====
 function renderOpportunities() {
-  let h = '<div class="flex-between mb-12"><h3>Opportunity Pipeline</h3><button class="btn" onclick="document.getElementById(\'add-opp\').classList.toggle(\'hidden\')">+ Add</button></div>';
-  h += '<div id="add-opp" class="card hidden" style="border-color:var(--gold-dim)"><input class="input mb-8" id="opp-name" placeholder="Name"><div class="flex gap-8 mb-8"><select class="select flex-1" id="opp-stage">'+STAGES.map((s,i)=>'<option value="'+i+'">'+s+'</option>').join("")+'</select><select class="select flex-1" id="opp-type"><option value="deal">deal</option><option value="client">client</option><option value="partnership">partnership</option><option value="project">project</option><option value="pro-bono">pro-bono</option></select><input class="input" id="opp-val" type="number" placeholder="$/mo" style="flex:1"></div><textarea class="input mb-8" id="opp-notes" placeholder="Notes" rows="2"></textarea><button class="btn" onclick="addOpp()">Add</button></div>';
+  let h = '<div class="flex-between mb-12"><h3>Deal Pipeline</h3><button class="btn" onclick="document.getElementById(\'add-opp\').classList.toggle(\'hidden\')">+ Add</button></div>';
+  h += '<div id="add-opp" class="card hidden" style="border-color:var(--gold-dim)"><input class="input mb-8" id="opp-name" placeholder="Name"><div class="flex gap-8 mb-8"><select class="select flex-1" id="opp-stage">'+STAGES.map((s,i)=>'<option value="'+i+'">'+s+'</option>').join("")+'</select><select class="select flex-1" id="opp-type" onchange="oppTypeChange()"><option value="deal">deal</option><option value="client">client</option><option value="partnership">partnership</option><option value="pro-bono">pro-bono</option></select><div id="opp-val-wrap" style="flex:1"><input class="input" id="opp-val" type="number" placeholder="$/mo"></div></div><textarea class="input mb-8" id="opp-notes" placeholder="Notes" rows="2"></textarea><button class="btn" onclick="addOpp()">Add</button></div>';
   STAGES.forEach((sn, si) => {
     const opps = state.opportunities.filter(o=>o.stage===si);
     if (!opps.length) return;
@@ -439,15 +585,26 @@ function renderOpportunities() {
       h += '<textarea class="input mb-8" rows="2" onchange="updateOppNotes(\''+opp.id+'\',this.value)">'+esc(opp.notes)+'</textarea>';
       h += '<div class="flex gap-8 flex-wrap"><select class="select" onchange="updateOppStage(\''+opp.id+'\',+this.value)">'+STAGES.map((s,i)=>'<option value="'+i+'"'+(i===opp.stage?' selected':'')+'>'+s+'</option>').join("")+'</select>';
       h += '<input class="input" type="number" style="width:120px" value="'+(opp.monthlyValue||'')+'" placeholder="$/mo" onchange="updateOppVal(\''+opp.id+'\',+this.value)">';
+      if (opp.stage === 5) h += '<button class="btn-ghost btn-sm" style="color:var(--cyan)" onclick="event.stopPropagation();moveToProjects(\''+opp.id+'\')">Move to Projects</button>';
       h += '<button class="btn-ghost btn-danger" onclick="removeOpp(\''+opp.id+'\')">Remove</button></div></div></div>';
     });
     h += '</div>';
   });
   return h;
 }
+function oppTypeChange() {
+  const type = document.getElementById("opp-type").value;
+  const wrap = document.getElementById("opp-val-wrap");
+  if (wrap) {
+    if (type === "pro-bono") wrap.style.display = "none";
+    else wrap.style.display = "";
+  }
+}
 function addOpp() {
   const n=document.getElementById("opp-name").value.trim(); if(!n) return;
-  state.opportunities.push({ id:uid(), name:n, stage:+document.getElementById("opp-stage").value, notes:document.getElementById("opp-notes").value, monthlyValue:+(document.getElementById("opp-val").value||0), type:document.getElementById("opp-type").value });
+  const type = document.getElementById("opp-type").value;
+  const val = type === "pro-bono" ? 0 : +(document.getElementById("opp-val").value||0);
+  state.opportunities.push({ id:uid(), name:n, stage:+document.getElementById("opp-stage").value, notes:document.getElementById("opp-notes").value, monthlyValue:val, type:type });
   save(); render();
 }
 function toggleEditOpp(id) { const el=document.getElementById("edit-"+id); if(el) el.classList.toggle("hidden"); }
@@ -455,6 +612,22 @@ function updateOppNotes(id,v) { const o=state.opportunities.find(x=>x.id===id); 
 function updateOppStage(id,v) { const o=state.opportunities.find(x=>x.id===id); if(o){if(v>o.stage)addXP(XP_VALUES.deal_advance,"Deal Advanced");if(v>=4&&o.stage<4)addXP(XP_VALUES.deal_close,"DEAL CLOSED!");o.stage=v;save();render();} }
 function updateOppVal(id,v) { const o=state.opportunities.find(x=>x.id===id); if(o){o.monthlyValue=v;save();render();} }
 function removeOpp(id) { if(!confirm("Remove?")) return; state.opportunities=state.opportunities.filter(o=>o.id!==id); save(); render(); }
+function moveToProjects(id) {
+  const opp = state.opportunities.find(o => o.id === id);
+  if (!opp) return;
+  if (!confirm("Move '" + opp.name + "' to Projects as a professional project?")) return;
+  if (!state.projects) state.projects = [];
+  state.projects.push({
+    id: opp.id,
+    name: opp.name,
+    category: "professional",
+    notes: opp.notes,
+    monthlyValue: opp.monthlyValue || 0,
+    updates: [{ date: new Date().toISOString(), text: "Migrated from Deals (was at Collecting Revenue stage)." }]
+  });
+  state.opportunities = state.opportunities.filter(o => o.id !== id);
+  save(); render();
+}
 
 // ===== SESSIONS =====
 function renderSessions(c) {
@@ -526,11 +699,7 @@ function renderActions(c) {
   h += '<div class="card"><div class="label">Waiting For</div><div class="flex gap-8 mb-8"><input class="input flex-1" id="wf-text" placeholder="Who / what?" onkeydown="if(event.key===\'Enter\')addWaiting()"><button class="btn-ghost" onclick="addWaiting()">Add</button></div>';
   state.waitingFor.forEach((w,i) => { h += '<div class="flex-between section-divider"><span style="font-size:13px">'+esc(w.text)+' <span class="dim">('+fmtDate(w.created)+')</span></span><button class="btn-icon" style="color:var(--green)" onclick="resolveWaiting('+i+')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 13l4 4L19 7"/></svg></button></div>'; });
   h += '</div>';
-  // Someday/Maybe
-  h += '<div class="card"><div class="label">Someday / Maybe</div><div class="flex gap-8 mb-8"><input class="input flex-1" id="sm-text" placeholder="Park it here..." onkeydown="if(event.key===\'Enter\')addSomeday()"><button class="btn-ghost" onclick="addSomeday()">Add</button></div>';
-  state.somedayMaybe.forEach((item,i) => { h += '<div class="flex-between section-divider" style="font-size:13px"><span>'+esc(item)+'</span><div class="flex gap-8"><button class="btn-icon" style="color:var(--gold);font-size:11px" onclick="activateSomeday('+i+')">Activate</button><button class="btn-icon" style="color:var(--red)" onclick="removeSomeday('+i+')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button></div></div>'; });
-  h += '</div>';
-  // Per opp
+  // Per opp actions
   state.opportunities.forEach(opp => {
     const acts = state.weeklyActions[opp.id] || [];
     const stuck = acts.length === 0 || acts.every(a=>a.done);
@@ -572,8 +741,14 @@ function renderHabits() {
   });
   return h;
 }
-function habitPlus(id) { state.habitLog[id]=(state.habitLog[id]||0)+1; addXP(XP_VALUES.habit,"+15 XP"); }
-function habitMinus(id) { state.habitLog[id]=Math.max((state.habitLog[id]||0)-1,0); save(); render(); }
+function habitPlus(id) { state.habitLog[id]=(state.habitLog[id]||0)+1; addXP(XP_VALUES.habit,"Habit Rep"); }
+function habitMinus(id) {
+  const prev = state.habitLog[id]||0;
+  if (prev > 0) {
+    state.habitLog[id] = prev - 1;
+    addXP(-XP_VALUES.habit, "Habit Undone");
+  }
+}
 
 // ===== INBOX =====
 function renderInbox() {
@@ -589,11 +764,24 @@ function inboxCapture() { const el=document.getElementById("inbox-text"); if(!el
 function inboxSomeday(id) { const item=state.inbox.find(x=>x.id===id); if(item) state.somedayMaybe.push(item.text); state.inbox=state.inbox.filter(x=>x.id!==id); save(); render(); }
 function inboxAction(id) {
   const item=state.inbox.find(x=>x.id===id); if(!item) return;
-  const name=prompt("Which opportunity? (or blank)"); const opp=state.opportunities.find(o=>o.name.toLowerCase().includes((name||"").toLowerCase()));
+  const name=prompt("Which opportunity? (or blank)");
+  if (name === null) return; // User cancelled - don't remove from inbox
+  const opp=state.opportunities.find(o=>o.name.toLowerCase().includes((name||"").toLowerCase()));
   if(opp) { if(!state.weeklyActions[opp.id]) state.weeklyActions[opp.id]=[]; state.weeklyActions[opp.id].push({id:uid(),text:item.text,done:false}); }
   state.inbox=state.inbox.filter(x=>x.id!==id); addXP(XP_VALUES.inbox_clear,"Processed");
 }
 function inboxTrash(id) { state.inbox=state.inbox.filter(x=>x.id!==id); addXP(XP_VALUES.inbox_clear,"Cleared"); }
+
+// ===== SOMEDAY/MAYBE =====
+function renderSomeday() {
+  let h = '<h3 class="mb-4">Someday / Maybe</h3><p class="dim mb-16" style="font-size:13px">Park ideas here. Activate them when ready.</p>';
+  h += '<div class="flex gap-8 mb-16"><input class="input flex-1" id="sm-text" placeholder="Park it here..." onkeydown="if(event.key===\'Enter\')addSomeday()"><button class="btn" onclick="addSomeday()">Add</button></div>';
+  if (!state.somedayMaybe.length) h += '<div class="text-center dim" style="padding:40px">Nothing parked. Capture ideas here for later.</div>';
+  state.somedayMaybe.forEach((item,i) => {
+    h += '<div class="card flex-between" style="font-size:13px"><span>'+esc(item)+'</span><div class="flex gap-8"><button class="btn-ghost btn-sm" style="color:var(--gold)" onclick="activateSomeday('+i+')">Activate</button><button class="btn-ghost btn-sm btn-danger" onclick="removeSomeday('+i+')">Remove</button></div></div>';
+  });
+  return h;
+}
 
 // ===== REVIEW =====
 function renderReview(c) {
@@ -615,6 +803,54 @@ function saveSnapshot() {
   const snap = { weekId:wk, date:new Date().toISOString(), xp:state.xp, streak:state.streak, actionsCompleted:c.doneActs, actionsTotal:c.allActs.length, habitsCompleted:c.habDone, habitsTarget:c.habTarget, reviewCompleted:c.revDone, reviewTotal:REVIEW_ITEMS.length, opportunities:state.opportunities.map(o=>({id:o.id,name:o.name,stage:o.stage})), weeklyScore:c.score };
   history = history.filter(h=>h.weekId!==wk).concat([snap]).sort((a,b)=>a.weekId.localeCompare(b.weekId));
   saveHistory();
+}
+
+// ===== DEBRIEF =====
+function renderDebrief() {
+  if (!state.debriefs) state.debriefs = [];
+  let h = '<h3 class="mb-4">Daily Debrief</h3><p class="dim mb-16" style="font-size:13px">Paste your daily debrief transcript. Review, save, and build a log.</p>';
+
+  // Input area
+  h += '<div class="card" style="border-color:var(--gold-dim)">';
+  h += '<textarea class="input mb-8" id="debrief-text" placeholder="Paste your daily debrief transcript here..." rows="8" style="min-height:140px"></textarea>';
+  h += '<div class="flex gap-8"><button class="btn" onclick="reviewDebrief()">Review & Apply</button></div>';
+  h += '<div id="debrief-preview" class="hidden mt-12"></div>';
+  h += '</div>';
+
+  // Previous debriefs
+  if (state.debriefs.length) {
+    h += '<div class="mt-16"><div class="label">Previous Debriefs</div>';
+    state.debriefs.slice().reverse().forEach((d, ri) => {
+      const idx = state.debriefs.length - 1 - ri;
+      h += '<div class="card" style="border-left:3px solid var(--gold-dim)">';
+      h += '<div class="flex-between mb-4"><span class="dim" style="font-size:12px">'+fmtDate(d.date)+'</span>';
+      h += '<button class="btn-ghost btn-sm" onclick="toggleDebriefEntry('+idx+')">Expand</button></div>';
+      h += '<div id="debrief-entry-'+idx+'" class="hidden"><div style="white-space:pre-wrap;font-size:13px;color:var(--dim);margin-top:8px;max-height:300px;overflow-y:auto">'+esc(d.text)+'</div></div>';
+      h += '</div>';
+    });
+    h += '</div>';
+  }
+
+  return h;
+}
+function toggleDebriefEntry(idx) {
+  const el = document.getElementById("debrief-entry-"+idx);
+  if (el) el.classList.toggle("hidden");
+}
+function reviewDebrief() {
+  const text = document.getElementById("debrief-text").value.trim();
+  if (!text) return;
+  const preview = document.getElementById("debrief-preview");
+  if (!preview) return;
+  preview.classList.remove("hidden");
+  preview.innerHTML = '<div class="card" style="border-color:var(--gold-dim);background:var(--bg)"><div class="label">Proposed Updates</div><div style="white-space:pre-wrap;font-size:13px;margin-bottom:8px">'+esc(text)+'</div><div class="dim" style="font-size:11px;margin-bottom:12px">AI analysis coming soon -- for now, review the transcript above and confirm to save.</div><button class="btn" onclick="confirmDebrief()">Confirm & Save</button></div>';
+}
+function confirmDebrief() {
+  const text = document.getElementById("debrief-text").value.trim();
+  if (!text) return;
+  if (!state.debriefs) state.debriefs = [];
+  state.debriefs.push({ date: new Date().toISOString(), text: text });
+  save(); render();
 }
 
 // ===== HISTORY =====
@@ -643,6 +879,11 @@ async function initApp() {
   const pinInput = document.getElementById('pin-input');
   const pinBtn = document.getElementById('pin-btn');
   const pinError = document.getElementById('pin-error');
+
+  // Wire up project category change listener after render
+  document.addEventListener('change', function(e) {
+    if (e.target && e.target.id === 'proj-cat') projCatChange();
+  });
 
   pinBtn.onclick = async () => {
     const pin = pinInput.value;
