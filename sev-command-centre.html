@@ -120,7 +120,7 @@ button:hover { opacity: 0.85; }
 </head>
 <body>
 
-<div class="lock-screen" id="lock-screen">
+<div class="lock-screen" id="lock-screen" style="opacity:0;transition:opacity 0.15s">
   <div class="lock-box">
     <div style="color:var(--gold);font-weight:800;font-size:22px;margin-bottom:4px">SEV COMMAND CENTRE</div>
     <div class="dim" style="margin-bottom:24px">Enter PIN to unlock</div>
@@ -933,6 +933,8 @@ async function initApp() {
     sessionStorage.removeItem('sev-vault');
     vaultPath = null;
   }
+  // No saved session — show lock screen
+  lock.style.opacity = '1';
 
   pinBtn.onclick = async () => {
     const pin = pinInput.value;
