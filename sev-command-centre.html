@@ -653,6 +653,14 @@ async function initApp() {
 
     try {
       const hash = await hashPIN(pin);
+      const OWNER_HASH = 'c67d2378c3f8edea1f36335d7706cd43ab1ad0df9d788dae33bda28bfc6b9a42';
+      if (hash !== OWNER_HASH) {
+        pinError.textContent = 'Wrong PIN.';
+        pinInput.value = '';
+        pinBtn.textContent = 'Unlock';
+        pinBtn.disabled = false;
+        return;
+      }
       vaultPath = 'vaults/' + hash;
       const found = await loadFromFirebase();
 
