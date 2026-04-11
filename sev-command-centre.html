@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
 <title>SEV COMMAND CENTRE</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SEV CC">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✅</text></svg>">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -98,6 +102,15 @@ button:hover { opacity: 0.85; }
   .tabs { display: grid; grid-template-columns: repeat(5, 1fr); overflow-x: visible; }
   .tab { text-align: center; padding: 8px 4px; font-size: 11px; }
 }
+.pull-indicator { position:fixed;top:0;left:0;right:0;height:0;overflow:hidden;background:var(--bg2);z-index:50;display:flex;align-items:center;justify-content:center;transition:none;border-bottom:1px solid var(--border); }
+.pull-indicator.releasing { transition:height 0.3s ease; }
+.pull-indicator .pull-text { color:var(--gold);font-weight:600;font-size:13px;font-family:'DM Mono',monospace;opacity:0;transition:opacity 0.2s; }
+.pull-indicator .pull-text.visible { opacity:1; }
+.pull-indicator .pull-spinner { display:none;width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--gold);border-radius:50%;animation:spin 0.6s linear infinite; }
+.pull-indicator.loading .pull-spinner { display:block; }
+.pull-indicator.loading .pull-text { display:none; }
+@keyframes spin { to { transform:rotate(360deg); } }
+
 .lock-screen { position:fixed;top:0;left:0;right:0;bottom:0;background:var(--bg);z-index:1000;display:flex;align-items:center;justify-content:center; }
 .lock-screen.hidden { display:none !important; }
 .lock-box { max-width:340px;width:90%;text-align:center; }
@@ -115,6 +128,11 @@ button:hover { opacity: 0.85; }
     <div id="pin-error" style="color:var(--red);font-size:13px;min-height:24px;margin:8px 0"></div>
     <button class="btn" id="pin-btn" style="width:100%;padding:12px;font-size:15px">Unlock</button>
   </div>
+</div>
+
+<div class="pull-indicator" id="pull-indicator">
+  <span class="pull-text" id="pull-text">↓ Pull to refresh</span>
+  <div class="pull-spinner"></div>
 </div>
 
 <div id="xp-popup" class="xp-popup hidden"></div>
@@ -940,6 +958,80 @@ async function initApp() {
   pinInput.addEventListener('keydown', e => { if (e.key === 'Enter') pinBtn.click(); });
   pinInput.focus();
 }
+
+// ===== APPLE TOUCH ICON (canvas-generated PNG) =====
+(function() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 180; canvas.height = 180;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, 180, 180);
+  ctx.font = '140px serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('✅', 90, 95);
+  const url = canvas.toDataURL('image/png');
+  const link = document.createElement('link');
+  link.rel = 'apple-touch-icon';
+  link.href = url;
+  document.head.appendChild(link);
+})();
+
+// ===== PULL TO REFRESH (mobile) =====
+(function() {
+  const THRESHOLD = 80;
+  let startY = 0, pulling = false, pullDist = 0;
+  const indicator = document.getElementById('pull-indicator');
+  const pullText = document.getElementById('pull-text');
+
+  document.addEventListener('touchstart', function(e) {
+    if (document.getElementById('lock-screen').classList.contains('hidden') && window.scrollY <= 0) {
+      startY = e.touches[0].clientY;
+      pulling = true;
+      pullDist = 0;
+      indicator.classList.remove('releasing', 'loading');
+    }
+  }, { passive: true });
+
+  document.addEventListener('touchmove', function(e) {
+    if (!pulling) return;
+    const dy = e.touches[0].clientY - startY;
+    if (dy < 0) { pullDist = 0; indicator.style.height = '0px'; return; }
+    pullDist = Math.min(dy * 0.5, 120);
+    indicator.style.height = pullDist + 'px';
+    if (pullDist >= THRESHOLD) {
+      pullText.textContent = '↑ Release to refresh';
+      pullText.classList.add('visible');
+    } else if (pullDist > 20) {
+      pullText.textContent = '↓ Pull to refresh';
+      pullText.classList.add('visible');
+    } else {
+      pullText.classList.remove('visible');
+    }
+  }, { passive: true });
+
+  document.addEventListener('touchend', async function() {
+    if (!pulling) return;
+    pulling = false;
+    if (pullDist >= THRESHOLD && vaultPath) {
+      indicator.classList.add('loading');
+      indicator.style.height = '50px';
+      try {
+        await loadFromFirebase();
+        render();
+      } catch(e) { console.error('Refresh failed', e); }
+      setTimeout(() => {
+        indicator.classList.add('releasing');
+        indicator.style.height = '0px';
+        setTimeout(() => indicator.classList.remove('releasing', 'loading'), 300);
+      }, 400);
+    } else {
+      indicator.classList.add('releasing');
+      indicator.style.height = '0px';
+      setTimeout(() => indicator.classList.remove('releasing'), 300);
+    }
+  }, { passive: true });
+})();
 
 initApp();
 </script>
