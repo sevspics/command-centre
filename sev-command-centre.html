@@ -917,6 +917,23 @@ async function initApp() {
     if (e.target && e.target.id === 'proj-cat') projCatChange();
   });
 
+  // Auto-login on browser refresh if session is still active
+  const savedVault = sessionStorage.getItem('sev-vault');
+  if (savedVault) {
+    vaultPath = savedVault;
+    try {
+      const found = await loadFromFirebase();
+      if (found) {
+        lock.classList.add('hidden');
+        render();
+        checkAutoBackup();
+        return;
+      }
+    } catch(e) { console.warn('Auto-login failed, showing PIN screen'); }
+    sessionStorage.removeItem('sev-vault');
+    vaultPath = null;
+  }
+
   pinBtn.onclick = async () => {
     const pin = pinInput.value;
     if (pin.length < 4) { pinError.textContent = 'At least 4 characters'; return; }
@@ -935,6 +952,7 @@ async function initApp() {
         return;
       }
       vaultPath = 'vaults/' + hash;
+      sessionStorage.setItem('sev-vault', vaultPath);
       const found = await loadFromFirebase();
 
       if (found) {
