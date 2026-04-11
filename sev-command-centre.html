@@ -18,7 +18,7 @@
   --purple: #8b5cf6; --cyan: #06b6d4; --grey: #6b7280;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: 'DM Sans', system-ui, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
+body { font-family: 'DM Sans', system-ui, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; overscroll-behavior-y: contain; }
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
@@ -997,6 +997,7 @@ async function initApp() {
     if (!pulling) return;
     const dy = e.touches[0].clientY - startY;
     if (dy < 0) { pullDist = 0; indicator.style.height = '0px'; return; }
+    if (dy > 10) e.preventDefault();
     pullDist = Math.min(dy * 0.5, 120);
     indicator.style.height = pullDist + 'px';
     if (pullDist >= THRESHOLD) {
@@ -1008,7 +1009,7 @@ async function initApp() {
     } else {
       pullText.classList.remove('visible');
     }
-  }, { passive: true });
+  }, { passive: false });
 
   document.addEventListener('touchend', async function() {
     if (!pulling) return;
