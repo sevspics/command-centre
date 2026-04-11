@@ -190,7 +190,7 @@ const TAB_LIST = [
 ];
 
 // ===== STATE =====
-let state, history = [], currentTab = "dashboard";
+let state, history = [], currentTab = "dashboard", projectsSubTab = "professional";
 
 function defaultState() {
   return {
@@ -452,41 +452,42 @@ function renderProjects() {
   if (!state.projects) state.projects = [];
   const professional = state.projects.filter(p => p.category === "professional");
   const personal = state.projects.filter(p => p.category === "personal");
+  const isPro = projectsSubTab === "professional";
 
   let h = '<div class="flex-between mb-12"><h3>Projects</h3><button class="btn" onclick="document.getElementById(\'add-proj\').classList.toggle(\'hidden\')">+ Add Project</button></div>';
 
+  // Sub-tabs
+  h += '<div style="display:flex;gap:0;margin-bottom:16px;border:1px solid var(--border);border-radius:8px;overflow:hidden">';
+  h += '<button onclick="switchProjectsSubTab(\'professional\')" style="flex:1;padding:10px 16px;font-size:13px;font-weight:'+(isPro?'700':'400')+';border:none;cursor:pointer;background:'+(isPro?'var(--green)':'var(--bg2)')+';color:'+(isPro?'var(--bg)':'var(--dim)')+';font-family:inherit;transition:all 0.2s">Professional ('+professional.length+')</button>';
+  h += '<button onclick="switchProjectsSubTab(\'personal\')" style="flex:1;padding:10px 16px;font-size:13px;font-weight:'+(!isPro?'700':'400')+';border:none;cursor:pointer;background:'+(!isPro?'var(--cyan)':'var(--bg2)')+';color:'+(!isPro?'var(--bg)':'var(--dim)')+';font-family:inherit;transition:all 0.2s">Personal ('+personal.length+')</button>';
+  h += '</div>';
+
   // Add project form
   h += '<div id="add-proj" class="card hidden" style="border-color:var(--gold-dim)">';
-  h += '<div class="flex gap-8 mb-8"><select class="select flex-1" id="proj-cat"><option value="personal">Personal</option><option value="professional">Professional</option></select></div>';
+  h += '<div class="flex gap-8 mb-8"><select class="select flex-1" id="proj-cat"><option value="professional"'+(isPro?' selected':'')+'>Professional</option><option value="personal"'+(!isPro?' selected':'')+'>Personal</option></select></div>';
   h += '<input class="input mb-8" id="proj-name" placeholder="Project name">';
   h += '<textarea class="input mb-8" id="proj-notes" placeholder="Notes" rows="2"></textarea>';
-  h += '<div id="proj-val-wrap" class="mb-8 hidden"><input class="input" id="proj-val" type="number" placeholder="$/mo (revenue)"></div>';
+  h += '<div id="proj-val-wrap" class="mb-8'+(isPro?'':' hidden')+'"><input class="input" id="proj-val" type="number" placeholder="$/mo (revenue)"></div>';
   h += '<button class="btn" onclick="addProject()">Add Project</button></div>';
 
-  // Professional projects
-  if (professional.length) {
-    h += '<div class="mb-16"><div class="label" style="color:var(--green)">Professional Projects (Revenue-generating)</div>';
-    professional.forEach(proj => {
-      h += renderProjectCard(proj, "var(--green)");
-    });
-    h += '</div>';
-  }
-
-  // Personal projects
-  if (personal.length) {
-    h += '<div class="mb-16"><div class="label" style="color:var(--cyan)">Personal Projects (Brands & Side Projects)</div>';
-    personal.forEach(proj => {
-      h += renderProjectCard(proj, "var(--cyan)");
-    });
-    h += '</div>';
-  }
-
-  if (!professional.length && !personal.length) {
-    h += '<div class="text-center dim" style="padding:40px">No projects yet. Add your first above.</div>';
+  // Show the active sub-tab's projects
+  if (isPro) {
+    if (professional.length) {
+      professional.forEach(proj => { h += renderProjectCard(proj, "var(--green)"); });
+    } else {
+      h += '<div class="text-center dim" style="padding:40px">No professional projects yet.</div>';
+    }
+  } else {
+    if (personal.length) {
+      personal.forEach(proj => { h += renderProjectCard(proj, "var(--cyan)"); });
+    } else {
+      h += '<div class="text-center dim" style="padding:40px">No personal projects yet.</div>';
+    }
   }
 
   return h;
 }
+function switchProjectsSubTab(tab) { projectsSubTab = tab; render(); }
 
 function renderProjectCard(proj, borderColor) {
   let h = '<div class="card" style="border-left:3px solid '+borderColor+'">';
@@ -502,6 +503,11 @@ function renderProjectCard(proj, borderColor) {
   h += '<div class="flex gap-8 mb-8"><button class="btn-ghost btn-sm" onclick="toggleProjectUpdates(\''+proj.id+'\')">Updates ('+updates.length+')</button>';
   h += '<button class="btn-ghost btn-sm" onclick="showAddUpdate(\''+proj.id+'\')">+ Add Update</button>';
   h += '<button class="btn-ghost btn-sm" onclick="editProjectNotes(\''+proj.id+'\')">Edit</button>';
+  if (proj.category === "personal") {
+    h += '<button class="btn-ghost btn-sm" style="color:var(--green);border-color:rgba(34,197,94,0.3)" onclick="moveProjectCategory(\''+proj.id+'\',\'professional\')">Move to Professional</button>';
+  } else {
+    h += '<button class="btn-ghost btn-sm" style="color:var(--cyan);border-color:rgba(6,182,212,0.3)" onclick="moveProjectCategory(\''+proj.id+'\',\'personal\')">Move to Personal</button>';
+  }
   h += '<button class="btn-ghost btn-sm btn-danger" onclick="removeProject(\''+proj.id+'\')">Remove</button></div>';
 
   // Inline add update input
@@ -557,6 +563,14 @@ function editProjectNotes(id) {
 function removeProject(id) {
   if (!confirm("Remove this project?")) return;
   state.projects = state.projects.filter(p => p.id !== id);
+  save(); render();
+}
+function moveProjectCategory(id, newCategory) {
+  const proj = state.projects.find(p => p.id === id);
+  if (!proj) return;
+  proj.category = newCategory;
+  if (newCategory === "professional" && !proj.monthlyValue) proj.monthlyValue = 0;
+  projectsSubTab = newCategory;
   save(); render();
 }
 // Toggle $/mo field visibility based on category selection
