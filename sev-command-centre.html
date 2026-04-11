@@ -111,10 +111,6 @@ button:hover { opacity: 0.85; }
     <input class="input" id="pin-input" type="password" placeholder="Enter PIN" autocomplete="off" style="text-align:center;font-size:20px;letter-spacing:6px;padding:14px">
     <div id="pin-error" style="color:var(--red);font-size:13px;min-height:24px;margin:8px 0"></div>
     <button class="btn" id="pin-btn" style="width:100%;padding:12px;font-size:15px">Unlock</button>
-    <div id="pin-create" class="hidden" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-      <div class="dim" style="font-size:13px;margin-bottom:8px">No vault found for this PIN. First time?</div>
-      <button class="btn-ghost" id="pin-create-btn" style="width:100%">Create New Vault</button>
-    </div>
   </div>
 </div>
 
@@ -647,7 +643,6 @@ async function initApp() {
   const pinInput = document.getElementById('pin-input');
   const pinBtn = document.getElementById('pin-btn');
   const pinError = document.getElementById('pin-error');
-  const pinCreate = document.getElementById('pin-create');
 
   pinBtn.onclick = async () => {
     const pin = pinInput.value;
@@ -666,9 +661,10 @@ async function initApp() {
         trackStreak(); save(); render();
         checkAutoBackup();
       } else {
+        pinError.textContent = 'Wrong PIN.';
+        pinInput.value = '';
         pinBtn.textContent = 'Unlock';
         pinBtn.disabled = false;
-        pinCreate.classList.remove('hidden');
       }
     } catch(e) {
       console.error(e);
@@ -676,13 +672,6 @@ async function initApp() {
       pinBtn.textContent = 'Unlock';
       pinBtn.disabled = false;
     }
-  };
-
-  document.getElementById('pin-create-btn').onclick = async () => {
-    state = defaultState();
-    history = [];
-    lock.classList.add('hidden');
-    trackStreak(); save(); saveHistory(); render();
   };
 
   pinInput.addEventListener('keydown', e => { if (e.key === 'Enter') pinBtn.click(); });
