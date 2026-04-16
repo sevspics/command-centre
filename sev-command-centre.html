@@ -95,6 +95,12 @@ button:hover { opacity: 0.85; }
 .chart-bar { width: 100%; max-width: 40px; border-radius: 4px; min-height: 4px; }
 .chart-label { font-size: 9px; color: var(--dim); }
 
+.health-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.dismiss-btn { background: none; border: none; cursor: pointer; color: var(--dim); padding: 2px 4px; font-size: 16px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; border-radius: 4px; transition: all 0.15s; flex-shrink: 0; }
+.dismiss-btn:hover { color: var(--red); background: rgba(239,68,68,0.15); }
+.inline-action { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 3px 8px; font-size: 12px; color: var(--dim); width: 100%; cursor: text; }
+.inline-action:focus { border-color: var(--gold); color: var(--text); }
+
 @media (max-width: 500px) {
   .grid-4 { grid-template-columns: 1fr 1fr; }
   .grid-2 { grid-template-columns: 1fr; }
@@ -200,7 +206,7 @@ const REVIEW_ITEMS = [
   "Update opportunity stages and notes",
 ];
 const TAB_LIST = [
-  { id: "dashboard", label: "HQ" }, { id: "gmail", label: "Gmail" }, { id: "projects", label: "Projects" }, { id: "opportunities", label: "Deals" },
+  { id: "dashboard", label: "HQ" }, { id: "gmail", label: "Gmail" }, { id: "projects", label: "Growth" }, { id: "opportunities", label: "Deals" },
   { id: "sessions", label: "Sessions" }, { id: "commissions", label: "Commissions" },
   { id: "actions", label: "Actions" }, { id: "habits", label: "Habits" },
   { id: "inbox", label: "Inbox" }, { id: "someday", label: "Someday" }, { id: "review", label: "Review" },
@@ -213,14 +219,16 @@ let state, history = [], currentTab = "dashboard", projectsSubTab = "professiona
 function defaultState() {
   return {
     xp: 0, streak: 0, lastActiveDate: null,
+    dismissedEmails: [],
+    clientEmailMap: {},
     opportunities: [
-      { id: "raswa", name: "RASWA 2026", stage: 1, notes: "127K views proof. Proposal delivered. Follow up.", monthlyValue: 5000, type: "deal" },
-      { id: "goyojo", name: "GOYOJO Partnership", stage: 1, notes: "Tiers $2,750-$18K/mo + $12.5K China trip.", monthlyValue: 5500, type: "deal" },
-      { id: "sabine-brandon", name: "Sabine x Brandon Dungeon", stage: 1, notes: "$4,600+GST design fees. Sabine's project.", monthlyValue: 0, type: "deal" },
-      { id: "daecian", name: "Daecian (Retainer)", stage: 5, notes: "Proof-of-concept retainer.", monthlyValue: 2500, type: "client" },
-      { id: "living-oceans", name: "Living Oceans", stage: 5, notes: "Active client.", monthlyValue: 0, type: "client" },
-      { id: "jits-ai", name: "Jits AI", stage: 5, notes: "Active client.", monthlyValue: 0, type: "client" },
-      { id: "ben-macca", name: "Ben Macca (Pro Bono)", stage: 5, notes: "Pro bono.", monthlyValue: 0, type: "pro-bono" },
+      { id: "raswa", name: "RASWA 2026", stage: 1, notes: "127K views proof. Proposal delivered. Follow up.", monthlyValue: 5000, type: "deal", contacts: [], lastContact: null, nextAction: '' },
+      { id: "goyojo", name: "GOYOJO Partnership", stage: 1, notes: "Tiers $2,750-$18K/mo + $12.5K China trip.", monthlyValue: 5500, type: "deal", contacts: [], lastContact: null, nextAction: '' },
+      { id: "sabine-brandon", name: "Sabine x Brandon Dungeon", stage: 1, notes: "$4,600+GST design fees. Sabine's project.", monthlyValue: 0, type: "deal", contacts: [], lastContact: null, nextAction: '' },
+      { id: "daecian", name: "Daecian (Retainer)", stage: 5, notes: "Proof-of-concept retainer.", monthlyValue: 2500, type: "client", contacts: [], lastContact: null, nextAction: '' },
+      { id: "living-oceans", name: "Living Oceans", stage: 5, notes: "Active client.", monthlyValue: 0, type: "client", contacts: [], lastContact: null, nextAction: '' },
+      { id: "jits-ai", name: "Jits AI", stage: 5, notes: "Active client.", monthlyValue: 0, type: "client", contacts: [], lastContact: null, nextAction: '' },
+      { id: "ben-macca", name: "Ben Macca (Pro Bono)", stage: 5, notes: "Pro bono.", monthlyValue: 0, type: "pro-bono", contacts: [], lastContact: null, nextAction: '' },
     ],
     projects: [
       { id: "talktosev", name: "@talktosev Launch", category: "personal", notes: "Account creation, bio, Mitchell testimonial, lead magnet.", updates: [] },
@@ -268,11 +276,22 @@ function saveHistory() {
   }, 500);
 }
 function loadLocal() {
-  try { const s = localStorage.getItem(STORAGE_KEY); if (s) { state = JSON.parse(s); if (!state.sessions) state.sessions = defaultState().sessions; if (!state.commissions) state.commissions = []; if (!state.projects) state.projects = []; if (!state.debriefs) state.debriefs = []; } else state = defaultState(); } catch(e) { state = defaultState(); }
+  try { const s = localStorage.getItem(STORAGE_KEY); if (s) { state = JSON.parse(s); if (!state.sessions) state.sessions = defaultState().sessions; if (!state.commissions) state.commissions = []; if (!state.projects) state.projects = []; if (!state.debriefs) state.debriefs = []; if (!state.dismissedEmails) state.dismissedEmails = []; if (!state.clientEmailMap) state.clientEmailMap = {}; } else state = defaultState(); } catch(e) { state = defaultState(); }
   try { const h = localStorage.getItem(HISTORY_KEY); if (h) history = JSON.parse(h); } catch(e) {}
+  ensureOppFields();
+}
+function ensureOppFields() {
+  if (state.opportunities && Array.isArray(state.opportunities)) {
+    state.opportunities.forEach(o => {
+      if (!o.contacts) o.contacts = [];
+      if (!Array.isArray(o.contacts)) o.contacts = Object.values(o.contacts);
+      if (o.lastContact === undefined) o.lastContact = null;
+      if (o.nextAction === undefined) o.nextAction = '';
+    });
+  }
 }
 function fixArrays(obj) {
-  const keys = ['opportunities','inbox','habits','sessions','commissions','waitingFor','somedayMaybe','projects','debriefs'];
+  const keys = ['opportunities','inbox','habits','sessions','commissions','waitingFor','somedayMaybe','projects','debriefs','dismissedEmails'];
   keys.forEach(k => { if (obj[k] && !Array.isArray(obj[k])) obj[k] = Object.values(obj[k]); });
   if (obj.weeklyActions) {
     Object.keys(obj.weeklyActions).forEach(k => {
@@ -284,6 +303,12 @@ function fixArrays(obj) {
     obj.projects.forEach(p => {
       if (p.updates && !Array.isArray(p.updates)) p.updates = Object.values(p.updates);
       if (!p.updates) p.updates = [];
+    });
+  }
+  // Fix contacts arrays inside opportunities
+  if (obj.opportunities && Array.isArray(obj.opportunities)) {
+    obj.opportunities.forEach(o => {
+      if (o.contacts && !Array.isArray(o.contacts)) o.contacts = Object.values(o.contacts);
     });
   }
 }
@@ -309,7 +334,10 @@ async function loadFromFirebase() {
     if (!state.somedayMaybe) state.somedayMaybe = [];
     if (!state.projects) state.projects = def.projects;
     if (!state.debriefs) state.debriefs = [];
+    if (!state.dismissedEmails) state.dismissedEmails = [];
+    if (!state.clientEmailMap) state.clientEmailMap = {};
     fixArrays(state);
+    ensureOppFields();
   }
   if (fbHist) {
     history = Array.isArray(fbHist) ? fbHist : Object.values(fbHist);
@@ -363,6 +391,54 @@ function tagHTML(text, color) { return '<span class="tag" style="background:'+co
 function checkboxHTML(checked, onclick) { return '<div class="checkbox'+(checked?" checked":"")+'" onclick="'+onclick+'">'+(checked?'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#0d1117" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg>':'')+'</div>'; }
 function esc(s) { if (!s) return ""; return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 
+// ===== HEALTH HELPERS =====
+function getHealthStatus(lastContact) {
+  if (!lastContact) return { color: 'var(--grey)', label: 'No contact', days: null };
+  const days = Math.floor((Date.now() - new Date(lastContact).getTime()) / 86400000);
+  if (days <= 7) return { color: 'var(--green)', label: days + 'd ago', days: days };
+  if (days <= 14) return { color: 'var(--yellow)', label: days + 'd ago', days: days };
+  return { color: 'var(--red)', label: days + 'd ago', days: days };
+}
+
+function setDealNextAction(id) {
+  const opp = state.opportunities.find(o => o.id === id);
+  if (!opp) return;
+  const action = prompt("Next action for " + opp.name + ":", opp.nextAction || '');
+  if (action !== null) { opp.nextAction = action; save(); render(); }
+}
+
+function linkEmailToDeal(fromEmail, dealId) {
+  const opp = state.opportunities.find(o => o.id === dealId);
+  if (!opp) return;
+  if (!opp.contacts) opp.contacts = [];
+  const email = (fromEmail.match(/<([^>]+)>/) || [])[1] || fromEmail.toLowerCase().trim();
+  if (!opp.contacts.includes(email)) opp.contacts.push(email);
+  opp.lastContact = new Date().toISOString();
+  if (!state.clientEmailMap) state.clientEmailMap = {};
+  state.clientEmailMap[email] = dealId;
+  save(); render();
+}
+
+function showLinkToDealPicker(fromEmail) {
+  const deals = state.opportunities.filter(o => o.stage >= 0);
+  if (!deals.length) { alert('No deals in pipeline.'); return; }
+  const names = deals.map((d, i) => (i + 1) + '. ' + d.name).join('\n');
+  const pick = prompt('Link sender to which deal?\n\n' + names + '\n\nEnter number:');
+  if (pick === null) return;
+  const idx = parseInt(pick) - 1;
+  if (idx >= 0 && idx < deals.length) {
+    linkEmailToDeal(fromEmail, deals[idx].id);
+  }
+}
+
+function dismissEmail(threadId) {
+  if (!state.dismissedEmails) state.dismissedEmails = [];
+  if (!state.dismissedEmails.includes(threadId)) {
+    state.dismissedEmails.push(threadId);
+  }
+  save(); render();
+}
+
 // ===== COMPUTED =====
 function computed() {
   if (!state.weeklyActions) state.weeklyActions = {};
@@ -384,7 +460,18 @@ function computed() {
   const sesRev = (state.sessions||[]).reduce((s,x)=>s+x.price,0);
   const sesLeft = (state.sessions||[]).reduce((s,x)=>s+(x.sessionsTotal-x.sessionsUsed),0);
   const activeProjects = state.projects.length;
-  return { allActs, doneActs, habDone, habTarget, revDone, score, confirmed, pipeline, projectsRevenue, commBuild, commMonthly, sesRev, sesLeft, activeProjects };
+
+  // Client health counts
+  const activeClients = state.opportunities.filter(o => o.stage === 5);
+  let clientsGreen = 0, clientsYellow = 0, clientsRed = 0;
+  activeClients.forEach(o => {
+    const h = getHealthStatus(o.lastContact);
+    if (h.days !== null && h.days <= 7) clientsGreen++;
+    else if (h.days !== null && h.days <= 14) clientsYellow++;
+    else clientsRed++;
+  });
+
+  return { allActs, doneActs, habDone, habTarget, revDone, score, confirmed, pipeline, projectsRevenue, commBuild, commMonthly, sesRev, sesLeft, activeProjects, activeClients: activeClients.length, clientsGreen, clientsYellow, clientsRed };
 }
 
 // ===== GMAIL BRIEFING =====
@@ -415,6 +502,24 @@ async function fetchGmailBriefing(hours) {
     gmailData = await res.json();
     gmailLastFetched = new Date();
     gmailError = null;
+
+    // Auto-update deal contacts from gmail data
+    if (gmailData && gmailData.emails) {
+      Object.values(gmailData.emails).flat().forEach(function(email) {
+        const senderEmail = (email.from.match(/<([^>]+)>/) || [])[1] || email.from.toLowerCase().trim();
+        const dealId = state.clientEmailMap ? state.clientEmailMap[senderEmail] : null;
+        if (dealId) {
+          const deal = state.opportunities.find(function(o) { return o.id === dealId; });
+          if (deal) {
+            const emailDate = new Date(email.date);
+            if (!deal.lastContact || emailDate > new Date(deal.lastContact)) {
+              deal.lastContact = email.date;
+            }
+          }
+        }
+      });
+      save();
+    }
   } catch (e) {
     gmailError = 'Failed to fetch: ' + e.message;
     gmailData = null;
@@ -470,7 +575,7 @@ function gmailAddToPipeline(subject, from) {
 
   if (state.opportunities.find(o => o.name === name)) { alert('Already in pipeline: ' + name); return; }
   state.opportunities.push({
-    id: uid(), name: name, stage: stage, notes: notes, monthlyValue: monthlyVal, type: 'deal'
+    id: uid(), name: name, stage: stage, notes: notes, monthlyValue: monthlyVal, type: 'deal', contacts: [], lastContact: null, nextAction: ''
   });
   addXP(10, 'New Pipeline Deal');
   save(); render();
@@ -503,7 +608,7 @@ function gmailApplyDealUpdate(updateIdx) {
     state.opportunities.push({
       id: uid(), name: update.brandName, stage: stageMap[update.suggestedStage] ?? 0,
       notes: update.dealSummary + (update.nextSteps ? '\nNext: ' + update.nextSteps : ''),
-      monthlyValue: update.monthlyValue || 0, type: 'deal'
+      monthlyValue: update.monthlyValue || 0, type: 'deal', contacts: [], lastContact: null, nextAction: ''
     });
     addXP(10, 'New Pipeline Deal: ' + update.brandName);
   }
@@ -517,6 +622,25 @@ function gmailApplyDealUpdate(updateIdx) {
   }
 
   save(); render();
+}
+
+// Find matching deal for an email sender
+function findDealForSender(fromEmail) {
+  const senderEmail = (fromEmail.match(/<([^>]+)>/) || [])[1] || fromEmail.toLowerCase().trim();
+  const senderDomain = senderEmail.split('@')[1];
+  // Check clientEmailMap first (fast lookup)
+  if (state.clientEmailMap && state.clientEmailMap[senderEmail]) {
+    return state.clientEmailMap[senderEmail];
+  }
+  // Check deal contacts
+  for (const opp of state.opportunities) {
+    if (!opp.contacts || !opp.contacts.length) continue;
+    for (const c of opp.contacts) {
+      if (c === senderEmail) return opp.id;
+      if (senderDomain && c.split('@')[1] === senderDomain) return opp.id;
+    }
+  }
+  return null;
 }
 
 function renderGmail() {
@@ -539,11 +663,16 @@ function renderGmail() {
     return h;
   }
 
-  // Stats bar
+  // Stats bar (with dismissed emails filtered out)
   if (gmailData) {
+    const dismissed = state.dismissedEmails || [];
     const counts = {};
     let total = 0;
-    Object.entries(gmailData.emails).forEach(([cat, items]) => { counts[cat] = items.length; total += items.length; });
+    Object.entries(gmailData.emails).forEach(([cat, items]) => {
+      const filtered = items.filter(e => !dismissed.includes(e.threadId));
+      counts[cat] = filtered.length;
+      total += filtered.length;
+    });
     const actionable = (counts['CMD/Opportunities'] || 0) + (counts['CMD/Actions'] || 0) + (counts['CMD/Client Updates'] || 0);
     h += '<div class="grid-stats">';
     h += '<div class="stat-card"><div class="stat-val" style="color:var(--gold)">' + total + '</div><div class="stat-label">Total</div></div>';
@@ -627,17 +756,69 @@ function renderGmail() {
     }
   }
 
+  // Client Activity section - emails from known deal contacts
+  const clientActivityEmails = [];
+  const dismissed = state.dismissedEmails || [];
+  if (gmailData.emails) {
+    Object.values(gmailData.emails).flat().forEach(function(email) {
+      if (dismissed.includes(email.threadId)) return;
+      const dealId = findDealForSender(email.from);
+      if (dealId) {
+        const deal = state.opportunities.find(o => o.id === dealId);
+        if (deal) {
+          clientActivityEmails.push({ email: email, deal: deal });
+        }
+      }
+    });
+  }
+  if (clientActivityEmails.length > 0) {
+    // Group by deal
+    const byDeal = {};
+    clientActivityEmails.forEach(function(item) {
+      if (!byDeal[item.deal.id]) byDeal[item.deal.id] = { deal: item.deal, emails: [] };
+      byDeal[item.deal.id].emails.push(item.email);
+    });
+    h += '<div class="card" style="border-color:rgba(6,182,212,0.3)">';
+    h += '<div class="flex-center gap-8 mb-8"><span style="font-size:16px">🔗</span>';
+    h += '<span style="font-weight:700;color:var(--cyan)">Client Activity</span>';
+    h += '<span class="dim" style="font-size:11px">' + clientActivityEmails.length + ' emails from linked deals</span></div>';
+    Object.values(byDeal).forEach(function(group) {
+      const health = getHealthStatus(group.deal.lastContact);
+      h += '<div class="inner-card mb-8" style="padding:10px">';
+      h += '<div class="flex-center gap-8 mb-4">';
+      h += '<span class="health-dot" style="background:' + health.color + '"></span>';
+      h += '<span style="font-weight:600;font-size:13px;color:var(--cyan)">' + esc(group.deal.name) + '</span>';
+      h += '<span class="dim" style="font-size:10px;cursor:pointer" onclick="switchTab(\'opportunities\')">[view deal]</span>';
+      h += '</div>';
+      group.emails.forEach(function(email) {
+        const fromName = email.from.split('<')[0].trim().replace(/"/g, '');
+        h += '<div style="padding:4px 0;font-size:12px;border-top:1px solid var(--border)">';
+        h += '<div class="flex-between"><span>' + esc(email.subject) + '</span>';
+        h += '<div class="flex gap-4" style="flex-shrink:0"><span class="dim">' + gmailTimeAgo(email.date) + '</span>';
+        h += '<button class="btn-ghost btn-sm" onclick="gmailOpenThread(\'' + esc(email.threadId) + '\')">Open</button>';
+        h += '<button class="dismiss-btn" onclick="event.stopPropagation();dismissEmail(\'' + esc(email.threadId) + '\')" title="Dismiss">✕</button>';
+        h += '</div></div>';
+        h += '<div class="dim" style="font-size:11px">' + esc(fromName) + '</div>';
+        h += '</div>';
+      });
+      h += '</div>';
+    });
+    h += '</div>';
+  }
+
   // Render each category (priority order)
   const order = ['CMD/Opportunities', 'CMD/Actions', 'CMD/Client Updates', 'CMD/Finance', 'CMD/Admin', 'CMD/Noise'];
   let noiseCollapsed = true;
 
   order.forEach(cat => {
-    const items = gmailData.emails[cat] || [];
+    const allItems = gmailData.emails[cat] || [];
+    const items = allItems.filter(e => !dismissed.includes(e.threadId));
     const meta = GMAIL_CATEGORIES[cat];
     if (!meta) return;
 
     const isNoise = cat === 'CMD/Noise';
     const isEmpty = items.length === 0;
+    const showLinkBtn = (cat === 'CMD/Opportunities' || cat === 'CMD/Client Updates');
 
     h += '<div class="card' + (isEmpty ? '' : '') + '" style="' + (isEmpty ? 'opacity:0.5' : '') + '">';
     h += '<div class="flex-between mb-8" ' + (isNoise && items.length > 0 ? 'onclick="document.getElementById(\'noise-list\').classList.toggle(\'hidden\')" style="cursor:pointer"' : '') + '>';
@@ -660,10 +841,12 @@ function renderGmail() {
         h += '<div class="dim" style="font-size:11px">' + esc(fromName) + ' · ' + gmailTimeAgo(email.date) + '</div>';
         if (email.reason) h += '<div style="font-size:11px;color:' + meta.color + ';margin-top:2px;opacity:0.8">' + esc(email.reason) + '</div>';
         h += '</div>';
-        h += '<div class="flex gap-4" style="margin-left:8px;flex-shrink:0">';
+        h += '<div class="flex gap-4" style="margin-left:8px;flex-shrink:0;align-items:center">';
         h += '<button class="btn-ghost btn-sm" onclick="gmailOpenThread(\'' + esc(email.threadId) + '\')" title="Open in Gmail">Open</button>';
         if (!isNoise) h += '<button class="btn-ghost btn-sm" onclick="gmailSendToInbox(\'' + esc(email.subject.replace(/'/g, "\\'")) + '\',\'' + esc(fromName.replace(/'/g, "\\'")) + '\')" title="Add to GTD Inbox">→ Inbox</button>';
         if (cat === 'CMD/Opportunities') h += '<button class="btn-ghost btn-sm" style="color:var(--green);border-color:rgba(34,197,94,0.3)" onclick="gmailAddToPipeline(\'' + esc(email.subject.replace(/'/g, "\\'")) + '\',\'' + esc(email.from.replace(/'/g, "\\'")) + '\')" title="Add to Deals pipeline">→ Pipeline</button>';
+        if (showLinkBtn) h += '<button class="btn-ghost btn-sm" style="color:var(--cyan);border-color:rgba(6,182,212,0.3);font-size:10px" onclick="showLinkToDealPicker(\'' + esc(email.from.replace(/'/g, "\\'")) + '\')" title="Link sender to a deal">🔗 Deal</button>';
+        h += '<button class="dismiss-btn" onclick="event.stopPropagation();dismissEmail(\'' + esc(email.threadId) + '\')" title="Dismiss">✕</button>';
         h += '</div></div></div>';
       });
       h += '</div>';
@@ -697,7 +880,11 @@ function render() {
   TAB_LIST.forEach(t => {
     let badge = "";
     if (t.id === "inbox" && state.inbox.length > 0) badge = '<span class="badge">'+state.inbox.length+'</span>';
-    if (t.id === "gmail" && gmailData) { const ac = (gmailData.emails['CMD/Opportunities']||[]).length + (gmailData.emails['CMD/Actions']||[]).length; if (ac > 0) badge = '<span class="badge" style="background:var(--gold)">'+ac+'</span>'; }
+    if (t.id === "gmail" && gmailData) {
+      const dismissed = state.dismissedEmails || [];
+      const ac = (gmailData.emails['CMD/Opportunities']||[]).filter(e => !dismissed.includes(e.threadId)).length + (gmailData.emails['CMD/Actions']||[]).filter(e => !dismissed.includes(e.threadId)).length;
+      if (ac > 0) badge = '<span class="badge" style="background:var(--gold)">'+ac+'</span>';
+    }
     tabsH += '<button class="tab'+(currentTab===t.id?" active":"")+'" onclick="switchTab(\''+t.id+'\')">'+t.label+badge+'</button>';
   });
   document.getElementById("tabs").innerHTML = tabsH;
@@ -727,6 +914,17 @@ function switchTab(id) { currentTab = id; render(); }
 function renderDashboard(c, lv, nlv) {
   const lvPct = nlv ? ((state.xp - lv.xp) / (nlv.xp - lv.xp)) * 100 : 100;
   const scoreCol = c.score >= 80 ? "var(--green)" : c.score >= 50 ? "var(--yellow)" : "var(--red)";
+
+  // Client health summary
+  let clientHealthHTML = '';
+  if (c.activeClients > 0) {
+    clientHealthHTML = '<div class="flex-center gap-4 dim">Clients: ';
+    if (c.clientsGreen > 0) clientHealthHTML += '<span style="color:var(--green);font-weight:600">' + c.clientsGreen + '●</span>';
+    if (c.clientsYellow > 0) clientHealthHTML += '<span style="color:var(--yellow);font-weight:600;margin-left:4px">' + c.clientsYellow + '●</span>';
+    if (c.clientsRed > 0) clientHealthHTML += '<span style="color:var(--red);font-weight:600;margin-left:4px">' + c.clientsRed + '●</span>';
+    clientHealthHTML += '</div>';
+  }
+
   return `
     <div class="card card-accent">
       <div class="flex-between mb-8">
@@ -737,10 +935,18 @@ function renderDashboard(c, lv, nlv) {
       <div class="flex gap-12 mt-8" style="flex-wrap:wrap">
         <div class="flex-center gap-4 dim"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${state.streak>=7?'var(--yellow)':'var(--dim)'}" stroke-width="2"><path d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z"/></svg><span style="font-weight:600;color:${state.streak>=7?'var(--yellow)':'var(--dim)'}">${state.streak} day streak</span></div>
         <div class="flex-center gap-4 dim">Week: <b style="color:${scoreCol}">${c.score}%</b></div>
+        ${clientHealthHTML}
       </div>
     </div>
     <div class="grid-stats">
-      ${[{l:"Confirmed /mo",v:"$"+c.confirmed.toLocaleString(),c:"var(--green)"},{l:"Pipeline /mo",v:"$"+c.pipeline.toLocaleString(),c:"var(--yellow)"},{l:"Projects Rev /mo",v:"$"+c.projectsRevenue.toLocaleString(),c:"var(--cyan)"},{l:"Active Projects",v:c.activeProjects,c:"var(--cyan)"},{l:"Commissions /mo",v:"$"+Math.round(c.commMonthly).toLocaleString(),c:"var(--purple)"},{l:"Sessions Left",v:c.sesLeft,c:"var(--cyan)"},{l:"Actions",v:c.doneActs+"/"+c.allActs.length,c:"var(--gold)"},{l:"Inbox",v:state.inbox.length,c:state.inbox.length>5?"var(--red)":"var(--green)"}].map(s=>'<div class="card stat-card"><div class="stat-val" style="color:'+s.c+'">'+s.v+'</div><div class="stat-label">'+s.l+'</div></div>').join("")}
+      ${[{l:"Confirmed /mo",v:"$"+c.confirmed.toLocaleString(),c:"var(--green)"},{l:"Pipeline /mo",v:"$"+c.pipeline.toLocaleString(),c:"var(--yellow)"},{l:"Projects Rev /mo",v:"$"+c.projectsRevenue.toLocaleString(),c:"var(--cyan)"},{l:"Clients: "+c.activeClients+" active",v:c.activeClients,c:"var(--cyan)"},{l:"Commissions /mo",v:"$"+Math.round(c.commMonthly).toLocaleString(),c:"var(--purple)"},{l:"Sessions Left",v:c.sesLeft,c:"var(--cyan)"},{l:"Actions",v:c.doneActs+"/"+c.allActs.length,c:"var(--gold)"},{l:"Inbox",v:state.inbox.length,c:state.inbox.length>5?"var(--red)":"var(--green)"}].map(s=>'<div class="card stat-card"><div class="stat-val" style="color:'+s.c+'">'+s.v+'</div><div class="stat-label">'+s.l+'</div></div>').join("")}
+    </div>
+    <div class="card">
+      <div class="label">Client Health</div>
+      ${state.opportunities.filter(o=>o.stage===5).length === 0 ? '<div class="dim" style="font-size:12px">No active clients (stage 5) yet.</div>' : state.opportunities.filter(o=>o.stage===5).map(o => {
+        const h = getHealthStatus(o.lastContact);
+        return '<div class="flex-center gap-8 section-divider" style="padding:6px 0"><span class="health-dot" style="background:'+h.color+'"></span><span style="font-weight:500">'+esc(o.name)+'</span><span class="dim" style="font-size:11px;margin-left:auto">'+h.label+'</span></div>';
+      }).join("")}
     </div>
     <div class="card">
       <div class="label">Quick Capture (GTD Inbox)</div>
@@ -765,24 +971,25 @@ function dashCapture() {
   el.value = ""; trackStreak(); save(); render();
 }
 
-// ===== PROJECTS =====
+// ===== PROJECTS (Growth) =====
 function renderProjects() {
   if (!state.projects) state.projects = [];
   const professional = state.projects.filter(p => p.category === "professional");
   const personal = state.projects.filter(p => p.category === "personal");
   const isPro = projectsSubTab === "professional";
 
-  let h = '<div class="flex-between mb-12"><h3>Projects</h3><button class="btn" onclick="document.getElementById(\'add-proj\').classList.toggle(\'hidden\')">+ Add Project</button></div>';
+  let h = '<div class="flex-between mb-4"><h3>Growth Projects</h3><button class="btn" onclick="document.getElementById(\'add-proj\').classList.toggle(\'hidden\')">+ Add Project</button></div>';
+  h += '<div class="dim mb-12" style="font-size:12px">Projects that drive your pipeline and build your brand</div>';
 
   // Sub-tabs
   h += '<div style="display:flex;gap:0;margin-bottom:16px;border:1px solid var(--border);border-radius:8px;overflow:hidden">';
-  h += '<button onclick="switchProjectsSubTab(\'professional\')" style="flex:1;padding:10px 16px;font-size:13px;font-weight:'+(isPro?'700':'400')+';border:none;cursor:pointer;background:'+(isPro?'var(--green)':'var(--bg2)')+';color:'+(isPro?'var(--bg)':'var(--dim)')+';font-family:inherit;transition:all 0.2s">Professional ('+professional.length+')</button>';
-  h += '<button onclick="switchProjectsSubTab(\'personal\')" style="flex:1;padding:10px 16px;font-size:13px;font-weight:'+(!isPro?'700':'400')+';border:none;cursor:pointer;background:'+(!isPro?'var(--cyan)':'var(--bg2)')+';color:'+(!isPro?'var(--bg)':'var(--dim)')+';font-family:inherit;transition:all 0.2s">Personal ('+personal.length+')</button>';
+  h += '<button onclick="switchProjectsSubTab(\'professional\')" style="flex:1;padding:10px 16px;font-size:13px;font-weight:'+(isPro?'700':'400')+';border:none;cursor:pointer;background:'+(isPro?'var(--green)':'var(--bg2)')+';color:'+(isPro?'var(--bg)':'var(--dim)')+';font-family:inherit;transition:all 0.2s">Revenue Driving ('+professional.length+')</button>';
+  h += '<button onclick="switchProjectsSubTab(\'personal\')" style="flex:1;padding:10px 16px;font-size:13px;font-weight:'+(!isPro?'700':'400')+';border:none;cursor:pointer;background:'+(!isPro?'var(--cyan)':'var(--bg2)')+';color:'+(!isPro?'var(--bg)':'var(--dim)')+';font-family:inherit;transition:all 0.2s">Brand Building ('+personal.length+')</button>';
   h += '</div>';
 
   // Add project form
   h += '<div id="add-proj" class="card hidden" style="border-color:var(--gold-dim)">';
-  h += '<div class="flex gap-8 mb-8"><select class="select flex-1" id="proj-cat"><option value="professional"'+(isPro?' selected':'')+'>Professional</option><option value="personal"'+(!isPro?' selected':'')+'>Personal</option></select></div>';
+  h += '<div class="flex gap-8 mb-8"><select class="select flex-1" id="proj-cat"><option value="professional"'+(isPro?' selected':'')+'>Revenue Driving</option><option value="personal"'+(!isPro?' selected':'')+'>Brand Building</option></select></div>';
   h += '<input class="input mb-8" id="proj-name" placeholder="Project name">';
   h += '<textarea class="input mb-8" id="proj-notes" placeholder="Notes" rows="2"></textarea>';
   h += '<div id="proj-val-wrap" class="mb-8'+(isPro?'':' hidden')+'"><input class="input" id="proj-val" type="number" placeholder="$/mo (revenue)"></div>';
@@ -793,13 +1000,13 @@ function renderProjects() {
     if (professional.length) {
       professional.forEach(proj => { h += renderProjectCard(proj, "var(--green)"); });
     } else {
-      h += '<div class="text-center dim" style="padding:40px">No professional projects yet.</div>';
+      h += '<div class="text-center dim" style="padding:40px">No revenue driving projects yet.</div>';
     }
   } else {
     if (personal.length) {
       personal.forEach(proj => { h += renderProjectCard(proj, "var(--cyan)"); });
     } else {
-      h += '<div class="text-center dim" style="padding:40px">No personal projects yet.</div>';
+      h += '<div class="text-center dim" style="padding:40px">No brand building projects yet.</div>';
     }
   }
 
@@ -809,7 +1016,7 @@ function switchProjectsSubTab(tab) { projectsSubTab = tab; render(); }
 
 function renderProjectCard(proj, borderColor) {
   let h = '<div class="card" style="border-left:3px solid '+borderColor+'">';
-  h += '<div class="flex-between mb-4"><div><span style="font-weight:600">'+esc(proj.name)+'</span>'+tagHTML(proj.category, borderColor)+'</div>';
+  h += '<div class="flex-between mb-4"><div><span style="font-weight:600">'+esc(proj.name)+'</span>'+tagHTML(proj.category === 'professional' ? 'Revenue' : 'Brand', borderColor)+'</div>';
   if (proj.category === "professional" && proj.monthlyValue > 0) {
     h += '<span class="gold" style="font-weight:600">$'+proj.monthlyValue.toLocaleString()+'/mo</span>';
   }
@@ -822,9 +1029,9 @@ function renderProjectCard(proj, borderColor) {
   h += '<button class="btn-ghost btn-sm" onclick="showAddUpdate(\''+proj.id+'\')">+ Add Update</button>';
   h += '<button class="btn-ghost btn-sm" onclick="editProjectNotes(\''+proj.id+'\')">Edit</button>';
   if (proj.category === "personal") {
-    h += '<button class="btn-ghost btn-sm" style="color:var(--green);border-color:rgba(34,197,94,0.3)" onclick="moveProjectCategory(\''+proj.id+'\',\'professional\')">Move to Professional</button>';
+    h += '<button class="btn-ghost btn-sm" style="color:var(--green);border-color:rgba(34,197,94,0.3)" onclick="moveProjectCategory(\''+proj.id+'\',\'professional\')">Move to Revenue Driving</button>';
   } else {
-    h += '<button class="btn-ghost btn-sm" style="color:var(--cyan);border-color:rgba(6,182,212,0.3)" onclick="moveProjectCategory(\''+proj.id+'\',\'personal\')">Move to Personal</button>';
+    h += '<button class="btn-ghost btn-sm" style="color:var(--cyan);border-color:rgba(6,182,212,0.3)" onclick="moveProjectCategory(\''+proj.id+'\',\'personal\')">Move to Brand Building</button>';
   }
   h += '<button class="btn-ghost btn-sm btn-danger" onclick="removeProject(\''+proj.id+'\')">Remove</button></div>';
 
@@ -905,25 +1112,152 @@ function projCatChange() {
 function renderOpportunities() {
   let h = '<div class="flex-between mb-12"><h3>Deal Pipeline</h3><button class="btn" onclick="document.getElementById(\'add-opp\').classList.toggle(\'hidden\')">+ Add</button></div>';
   h += '<div id="add-opp" class="card hidden" style="border-color:var(--gold-dim)"><input class="input mb-8" id="opp-name" placeholder="Name"><div class="flex gap-8 mb-8"><select class="select flex-1" id="opp-stage">'+STAGES.map((s,i)=>'<option value="'+i+'">'+s+'</option>').join("")+'</select><select class="select flex-1" id="opp-type" onchange="oppTypeChange()"><option value="deal">deal</option><option value="client">client</option><option value="partnership">partnership</option><option value="pro-bono">pro-bono</option></select><div id="opp-val-wrap" style="flex:1"><input class="input" id="opp-val" type="number" placeholder="$/mo"></div></div><textarea class="input mb-8" id="opp-notes" placeholder="Notes" rows="2"></textarea><button class="btn" onclick="addOpp()">Add</button></div>';
-  STAGES.forEach((sn, si) => {
-    const opps = state.opportunities.filter(o=>o.stage===si);
-    if (!opps.length) return;
-    h += '<div class="mb-16"><div class="flex-center gap-8 mb-8"><div style="width:10px;height:10px;border-radius:50%;background:'+STAGE_COLORS[si]+'"></div><span style="font-weight:600;font-size:13px;text-transform:uppercase;letter-spacing:1px;color:'+STAGE_COLORS[si]+'">'+sn+' ('+opps.length+')</span></div>';
-    opps.forEach(opp => {
-      h += '<div class="card" style="border-left:3px solid '+STAGE_COLORS[si]+';cursor:pointer" onclick="toggleEditOpp(\''+opp.id+'\')">';
-      h += '<div class="flex-between"><div><span style="font-weight:600">'+esc(opp.name)+'</span>'+tagHTML(opp.type, STAGE_COLORS[si])+'</div>'+(opp.monthlyValue>0?'<span class="gold" style="font-weight:600">$'+opp.monthlyValue.toLocaleString()+'/mo</span>':'')+'</div>';
-      h += progressHTML((si/(STAGES.length-1))*100, STAGE_COLORS[si], 4);
-      h += '<div id="edit-'+opp.id+'" class="hidden" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)" onclick="event.stopPropagation()">';
-      h += '<textarea class="input mb-8" rows="2" onchange="updateOppNotes(\''+opp.id+'\',this.value)">'+esc(opp.notes)+'</textarea>';
-      h += '<div class="flex gap-8 flex-wrap"><select class="select" onchange="updateOppStage(\''+opp.id+'\',+this.value)">'+STAGES.map((s,i)=>'<option value="'+i+'"'+(i===opp.stage?' selected':'')+'>'+s+'</option>').join("")+'</select>';
-      h += '<input class="input" type="number" style="width:120px" value="'+(opp.monthlyValue||'')+'" placeholder="$/mo" onchange="updateOppVal(\''+opp.id+'\',+this.value)">';
-      if (opp.stage === 5) h += '<button class="btn-ghost btn-sm" style="color:var(--cyan)" onclick="event.stopPropagation();moveToProjects(\''+opp.id+'\')">Move to Projects</button>';
-      h += '<button class="btn-ghost btn-danger" onclick="removeOpp(\''+opp.id+'\')">Remove</button></div></div></div>';
+
+  // Pipeline section (stages 0-4)
+  const pipelineOpps = state.opportunities.filter(o => o.stage < 5);
+  const activeClientOpps = state.opportunities.filter(o => o.stage === 5);
+
+  if (pipelineOpps.length > 0) {
+    h += '<div class="mb-16"><div class="flex-center gap-8 mb-12"><span style="font-weight:700;font-size:15px;color:var(--gold)">Pipeline</span><span class="dim" style="font-size:11px">' + pipelineOpps.length + ' deals</span></div>';
+    STAGES.forEach((sn, si) => {
+      if (si >= 5) return;
+      const opps = state.opportunities.filter(o => o.stage === si);
+      if (!opps.length) return;
+      h += '<div class="mb-16"><div class="flex-center gap-8 mb-8"><div style="width:10px;height:10px;border-radius:50%;background:'+STAGE_COLORS[si]+'"></div><span style="font-weight:600;font-size:13px;text-transform:uppercase;letter-spacing:1px;color:'+STAGE_COLORS[si]+'">'+sn+' ('+opps.length+')</span></div>';
+      opps.forEach(opp => {
+        const health = getHealthStatus(opp.lastContact);
+        h += '<div class="card" style="border-left:3px solid '+STAGE_COLORS[si]+';cursor:pointer" onclick="toggleEditOpp(\''+opp.id+'\')">';
+        h += '<div class="flex-between"><div class="flex-center gap-8"><span class="health-dot" style="background:'+health.color+'"></span><span style="font-weight:600">'+esc(opp.name)+'</span>'+tagHTML(opp.type, STAGE_COLORS[si])+'</div>'+(opp.monthlyValue>0?'<span class="gold" style="font-weight:600">$'+opp.monthlyValue.toLocaleString()+'/mo</span>':'')+'</div>';
+        if (opp.nextAction) h += '<div style="font-size:12px;margin-top:4px;color:var(--yellow)">Next: ' + esc(opp.nextAction) + '</div>';
+        if (opp.lastContact) h += '<div class="dim" style="font-size:11px;margin-top:2px">Last contact: ' + health.label + '</div>';
+        h += progressHTML((si/(STAGES.length-1))*100, STAGE_COLORS[si], 4);
+        h += renderOppEditPanel(opp);
+        h += '</div>';
+      });
+      h += '</div>';
     });
     h += '</div>';
-  });
+  }
+
+  // Active Clients section (stage 5)
+  if (activeClientOpps.length > 0) {
+    h += '<div class="mb-16"><div class="flex-center gap-8 mb-12"><span style="font-weight:700;font-size:15px;color:var(--green)">Active Clients</span><span class="dim" style="font-size:11px">' + activeClientOpps.length + ' clients</span></div>';
+    activeClientOpps.forEach(opp => {
+      const health = getHealthStatus(opp.lastContact);
+      h += '<div class="card" style="border-left:3px solid '+health.color+'">';
+      // Header
+      h += '<div class="flex-between mb-4">';
+      h += '<div class="flex-center gap-8"><span class="health-dot" style="background:'+health.color+'"></span><span style="font-weight:600;font-size:15px">'+esc(opp.name)+'</span>'+tagHTML(opp.type, STAGE_COLORS[5])+'</div>';
+      h += (opp.monthlyValue>0?'<span class="gold" style="font-weight:600">$'+opp.monthlyValue.toLocaleString()+'/mo</span>':'');
+      h += '</div>';
+      // Health info
+      h += '<div class="dim mb-8" style="font-size:12px">Last heard: '+health.label+'</div>';
+      // Next action (inline editable)
+      h += '<div class="mb-8">';
+      h += '<div class="dim" style="font-size:10px;margin-bottom:2px">NEXT ACTION</div>';
+      h += '<input class="inline-action" value="'+esc(opp.nextAction || '')+'" placeholder="Set next action..." onchange="updateDealNextAction(\''+opp.id+'\',this.value)" onclick="event.stopPropagation()">';
+      h += '</div>';
+      // Notes
+      if (opp.notes) h += '<div class="dim mb-8" style="font-size:12px">'+esc(opp.notes)+'</div>';
+
+      // Recent emails from this client
+      const clientEmails = getRecentClientEmails(opp);
+      if (clientEmails.length > 0) {
+        h += '<div class="mb-8"><div class="dim" style="font-size:10px;margin-bottom:4px">RECENT EMAILS</div>';
+        clientEmails.slice(0, 3).forEach(email => {
+          h += '<div style="font-size:12px;padding:4px 0;border-top:1px solid var(--border)" class="flex-between">';
+          h += '<span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1">' + esc(email.subject) + '</span>';
+          h += '<div class="flex gap-4" style="flex-shrink:0;margin-left:8px"><span class="dim" style="font-size:10px">' + gmailTimeAgo(email.date) + '</span>';
+          h += '<button class="btn-ghost btn-sm" style="font-size:10px;padding:2px 6px" onclick="gmailOpenThread(\'' + esc(email.threadId) + '\')">Open</button></div>';
+          h += '</div>';
+        });
+        h += '</div>';
+      }
+
+      // Quick actions
+      h += '<div class="flex gap-8 flex-wrap">';
+      h += '<button class="btn-ghost btn-sm" onclick="setDealNextAction(\''+opp.id+'\')">Set Next Action</button>';
+      h += '<button class="btn-ghost btn-sm" onclick="addDealNote(\''+opp.id+'\')">Add Note</button>';
+      h += '<button class="btn-ghost btn-sm" onclick="manageDealContacts(\''+opp.id+'\')">Contacts ('+((opp.contacts||[]).length)+')</button>';
+      h += '<button class="btn-ghost btn-sm" style="color:var(--cyan)" onclick="event.stopPropagation();moveToProjects(\''+opp.id+'\')">Move to Projects</button>';
+      // Edit toggle
+      h += '<button class="btn-ghost btn-sm" onclick="toggleEditOpp(\''+opp.id+'\')">Edit</button>';
+      h += '</div>';
+      h += renderOppEditPanel(opp);
+      h += '</div>';
+    });
+    h += '</div>';
+  }
+
+  // Show empty states
+  if (pipelineOpps.length === 0 && activeClientOpps.length === 0) {
+    h += '<div class="text-center dim" style="padding:40px">No deals yet. Add your first above.</div>';
+  }
+
   return h;
 }
+
+function renderOppEditPanel(opp) {
+  let h = '';
+  h += '<div id="edit-'+opp.id+'" class="hidden" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)" onclick="event.stopPropagation()">';
+  h += '<textarea class="input mb-8" rows="2" onchange="updateOppNotes(\''+opp.id+'\',this.value)">'+esc(opp.notes)+'</textarea>';
+  h += '<div class="flex gap-8 flex-wrap"><select class="select" onchange="updateOppStage(\''+opp.id+'\',+this.value)">'+STAGES.map((s,i)=>'<option value="'+i+'"'+(i===opp.stage?' selected':'')+'>'+s+'</option>').join("")+'</select>';
+  h += '<input class="input" type="number" style="width:120px" value="'+(opp.monthlyValue||'')+'" placeholder="$/mo" onchange="updateOppVal(\''+opp.id+'\',+this.value)">';
+  h += '<button class="btn-ghost btn-danger" onclick="removeOpp(\''+opp.id+'\')">Remove</button></div></div>';
+  return h;
+}
+
+function getRecentClientEmails(opp) {
+  if (!gmailData || !gmailData.emails || !opp.contacts || !opp.contacts.length) return [];
+  const emails = [];
+  Object.values(gmailData.emails).flat().forEach(function(email) {
+    const senderEmail = (email.from.match(/<([^>]+)>/) || [])[1] || email.from.toLowerCase().trim();
+    const senderDomain = senderEmail.split('@')[1];
+    for (const c of opp.contacts) {
+      if (c === senderEmail || (senderDomain && c.split('@')[1] === senderDomain)) {
+        emails.push(email);
+        break;
+      }
+    }
+  });
+  emails.sort(function(a, b) { return new Date(b.date) - new Date(a.date); });
+  return emails;
+}
+
+function updateDealNextAction(id, value) {
+  const opp = state.opportunities.find(o => o.id === id);
+  if (!opp) return;
+  opp.nextAction = value;
+  save();
+}
+
+function addDealNote(id) {
+  const opp = state.opportunities.find(o => o.id === id);
+  if (!opp) return;
+  const note = prompt("Add note for " + opp.name + ":");
+  if (note !== null && note.trim()) {
+    opp.notes = (opp.notes ? opp.notes + '\n' : '') + '[' + new Date().toISOString().slice(0,10) + '] ' + note.trim();
+    save(); render();
+  }
+}
+
+function manageDealContacts(id) {
+  const opp = state.opportunities.find(o => o.id === id);
+  if (!opp) return;
+  if (!opp.contacts) opp.contacts = [];
+  const current = opp.contacts.length ? opp.contacts.join(', ') : '(none)';
+  const input = prompt("Contacts for " + opp.name + ":\nCurrent: " + current + "\n\nAdd email address (or leave blank):");
+  if (input !== null && input.trim()) {
+    const email = input.trim().toLowerCase();
+    if (!opp.contacts.includes(email)) {
+      opp.contacts.push(email);
+      if (!state.clientEmailMap) state.clientEmailMap = {};
+      state.clientEmailMap[email] = opp.id;
+    }
+    save(); render();
+  }
+}
+
 function oppTypeChange() {
   const type = document.getElementById("opp-type").value;
   const wrap = document.getElementById("opp-val-wrap");
@@ -936,7 +1270,7 @@ function addOpp() {
   const n=document.getElementById("opp-name").value.trim(); if(!n) return;
   const type = document.getElementById("opp-type").value;
   const val = type === "pro-bono" ? 0 : +(document.getElementById("opp-val").value||0);
-  state.opportunities.push({ id:uid(), name:n, stage:+document.getElementById("opp-stage").value, notes:document.getElementById("opp-notes").value, monthlyValue:val, type:type });
+  state.opportunities.push({ id:uid(), name:n, stage:+document.getElementById("opp-stage").value, notes:document.getElementById("opp-notes").value, monthlyValue:val, type:type, contacts: [], lastContact: null, nextAction: '' });
   save(); render();
 }
 function toggleEditOpp(id) { const el=document.getElementById("edit-"+id); if(el) el.classList.toggle("hidden"); }
@@ -947,7 +1281,7 @@ function removeOpp(id) { if(!confirm("Remove?")) return; state.opportunities=sta
 function moveToProjects(id) {
   const opp = state.opportunities.find(o => o.id === id);
   if (!opp) return;
-  if (!confirm("Move '" + opp.name + "' to Projects as a professional project?")) return;
+  if (!confirm("Move '" + opp.name + "' to Projects as a revenue driving project?")) return;
   if (!state.projects) state.projects = [];
   state.projects.push({
     id: opp.id,
