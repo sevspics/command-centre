@@ -200,7 +200,7 @@ const REVIEW_ITEMS = [
   "Update opportunity stages and notes",
 ];
 const TAB_LIST = [
-  { id: "dashboard", label: "HQ" }, { id: "projects", label: "Projects" }, { id: "opportunities", label: "Deals" },
+  { id: "dashboard", label: "HQ" }, { id: "gmail", label: "Gmail" }, { id: "projects", label: "Projects" }, { id: "opportunities", label: "Deals" },
   { id: "sessions", label: "Sessions" }, { id: "commissions", label: "Commissions" },
   { id: "actions", label: "Actions" }, { id: "habits", label: "Habits" },
   { id: "inbox", label: "Inbox" }, { id: "someday", label: "Someday" }, { id: "review", label: "Review" },
@@ -387,6 +387,304 @@ function computed() {
   return { allActs, doneActs, habDone, habTarget, revDone, score, confirmed, pipeline, projectsRevenue, commBuild, commMonthly, sesRev, sesLeft, activeProjects };
 }
 
+// ===== GMAIL BRIEFING =====
+// Set this to your deployed Google Apps Script web app URL
+const GMAIL_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyjRpPrqVgm5dS4tluHvIEeXZ1e_VOOvUqpGYAnSLDa0ZGzNdFkeRZYvUMGvxEisOp0zw/exec';
+
+let gmailData = null;
+let gmailLoading = false;
+let gmailError = null;
+let gmailLastFetched = null;
+
+const GMAIL_CATEGORIES = {
+  'CMD/Opportunities': { icon: '💰', color: 'var(--green)', label: 'Opportunities', desc: 'New leads & revenue' },
+  'CMD/Actions':       { icon: '⚡', color: 'var(--yellow)', label: 'Actions Required', desc: 'Needs your reply or task' },
+  'CMD/Client Updates': { icon: '🤝', color: 'var(--cyan)', label: 'Client Updates', desc: 'Project comms & feedback' },
+  'CMD/Finance':       { icon: '💳', color: 'var(--purple)', label: 'Finance', desc: 'Invoices, payments & tax' },
+  'CMD/Admin':         { icon: '📋', color: 'var(--dim)', label: 'Admin', desc: 'Subscriptions & tools' },
+  'CMD/Noise':         { icon: '🔇', color: 'var(--grey)', label: 'Noise', desc: 'Newsletters & marketing' },
+};
+
+async function fetchGmailBriefing(hours) {
+  if (!GMAIL_SCRIPT_URL) { gmailError = 'Set GMAIL_SCRIPT_URL in the source code.'; render(); return; }
+  gmailLoading = true; gmailError = null; render();
+  try {
+    const h = hours || 24;
+    const res = await fetch(GMAIL_SCRIPT_URL + '?hours=' + h);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    gmailData = await res.json();
+    gmailLastFetched = new Date();
+    gmailError = null;
+  } catch (e) {
+    gmailError = 'Failed to fetch: ' + e.message;
+    gmailData = null;
+  }
+  gmailLoading = false;
+  render();
+}
+
+function gmailTimeAgo(iso) {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60) return mins + 'm ago';
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return hrs + 'h ago';
+  return Math.floor(hrs / 24) + 'd ago';
+}
+
+function gmailOpenThread(threadId) {
+  window.open('https://mail.google.com/mail/u/0/#inbox/' + threadId, '_blank');
+}
+
+function gmailSendToInbox(subject, from) {
+  state.inbox.push({ id: uid(), text: 'Reply to ' + from.split('<')[0].trim() + ' — ' + subject, added: new Date().toISOString() });
+  save(); render();
+}
+
+function gmailAddToPipeline(subject, from) {
+  // Check if there's a deal update from meeting intelligence with a proper brand name
+  let name = from.split('<')[0].trim().replace(/"/g, '') || subject;
+  let notes = 'From Gmail: ' + subject;
+  let monthlyVal = 0;
+  let stage = 1;
+
+  if (gmailData && gmailData.dealUpdates) {
+    const match = gmailData.dealUpdates.find(d =>
+      subject.toLowerCase().includes(d.meetingTitle?.toLowerCase()) ||
+      d.meetingTitle?.toLowerCase().includes(subject.toLowerCase().replace(/^recap for\s+"?|"?\s*$/g, ''))
+    );
+    if (match) {
+      name = match.brandName || name;
+      notes = match.dealSummary + (match.nextSteps ? '\nNext: ' + match.nextSteps : '');
+      monthlyVal = match.monthlyValue || 0;
+      const stageMap = { 'Lead': 0, 'Proposal Sent': 1, 'In Negotiation': 2, 'Verbal Yes': 3, 'Signed': 4, 'Collecting Revenue': 5 };
+      stage = stageMap[match.suggestedStage] ?? 1;
+      // Add action items to inbox
+      if (match.actionItems) {
+        match.actionItems.filter(a => a.owner === 'Sev').forEach(a => {
+          state.inbox.push({ id: uid(), text: name + ': ' + a.task, added: new Date().toISOString() });
+        });
+      }
+    }
+  }
+
+  if (state.opportunities.find(o => o.name === name)) { alert('Already in pipeline: ' + name); return; }
+  state.opportunities.push({
+    id: uid(), name: name, stage: stage, notes: notes, monthlyValue: monthlyVal, type: 'deal'
+  });
+  addXP(10, 'New Pipeline Deal');
+  save(); render();
+}
+
+function gmailApplyDealUpdate(updateIdx) {
+  if (!gmailData || !gmailData.dealUpdates) return;
+  const update = gmailData.dealUpdates[updateIdx];
+  if (!update) return;
+
+  // Find matching deal in pipeline
+  const deal = state.opportunities.find(o =>
+    o.name.toLowerCase().includes(update.brandName.toLowerCase()) ||
+    update.brandName.toLowerCase().includes(o.name.toLowerCase())
+  );
+
+  if (deal) {
+    // Update existing deal
+    deal.notes = update.dealSummary + '\n\n[' + update.meetingDate.substring(0, 10) + '] ' + update.currentStatus + (update.nextSteps ? '\nNext: ' + update.nextSteps : '');
+    const stageMap = { 'Lead': 0, 'Proposal Sent': 1, 'In Negotiation': 2, 'Verbal Yes': 3, 'Signed': 4, 'Collecting Revenue': 5 };
+    const newStage = stageMap[update.suggestedStage] ?? deal.stage;
+    if (newStage > deal.stage) {
+      deal.stage = newStage;
+      addXP(50, 'Deal Advanced: ' + deal.name);
+    }
+    if (update.monthlyValue > deal.monthlyValue) deal.monthlyValue = update.monthlyValue;
+  } else {
+    // Create new deal
+    const stageMap = { 'Lead': 0, 'Proposal Sent': 1, 'In Negotiation': 2, 'Verbal Yes': 3, 'Signed': 4, 'Collecting Revenue': 5 };
+    state.opportunities.push({
+      id: uid(), name: update.brandName, stage: stageMap[update.suggestedStage] ?? 0,
+      notes: update.dealSummary + (update.nextSteps ? '\nNext: ' + update.nextSteps : ''),
+      monthlyValue: update.monthlyValue || 0, type: 'deal'
+    });
+    addXP(10, 'New Pipeline Deal: ' + update.brandName);
+  }
+
+  // Add action items to inbox
+  if (update.actionItems) {
+    update.actionItems.filter(a => a.owner === 'Sev').forEach(a => {
+      const exists = state.inbox.find(i => i.text.includes(a.task));
+      if (!exists) state.inbox.push({ id: uid(), text: update.brandName + ': ' + a.task, added: new Date().toISOString() });
+    });
+  }
+
+  save(); render();
+}
+
+function renderGmail() {
+  let h = '';
+
+  // Header
+  h += '<div class="card card-accent">';
+  h += '<div class="flex-between mb-8">';
+  h += '<div><span class="gold" style="font-weight:800;font-size:18px">Morning Briefing</span>';
+  h += '<div class="dim" style="font-size:11px;margin-top:2px">' + new Date().toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' }) + '</div></div>';
+  h += '<div style="display:flex;gap:8px;align-items:center">';
+  if (gmailLastFetched) h += '<span class="dim" style="font-size:10px">Updated ' + gmailTimeAgo(gmailLastFetched.toISOString()) + '</span>';
+  h += '<button class="btn btn-sm" onclick="fetchGmailBriefing(24)" ' + (gmailLoading ? 'disabled' : '') + '>' + (gmailLoading ? '⏳' : '↻ Refresh') + '</button>';
+  h += '</div></div>';
+
+  if (!GMAIL_SCRIPT_URL) {
+    h += '<div style="padding:20px 0;text-align:center"><div class="dim" style="margin-bottom:8px">Gmail integration not configured yet.</div>';
+    h += '<div style="font-size:12px;color:var(--dim)">1. Deploy the Google Apps Script<br>2. Paste the web app URL into <code>GMAIL_SCRIPT_URL</code></div></div>';
+    h += '</div>';
+    return h;
+  }
+
+  // Stats bar
+  if (gmailData) {
+    const counts = {};
+    let total = 0;
+    Object.entries(gmailData.emails).forEach(([cat, items]) => { counts[cat] = items.length; total += items.length; });
+    const actionable = (counts['CMD/Opportunities'] || 0) + (counts['CMD/Actions'] || 0) + (counts['CMD/Client Updates'] || 0);
+    h += '<div class="grid-stats">';
+    h += '<div class="stat-card"><div class="stat-val" style="color:var(--gold)">' + total + '</div><div class="stat-label">Total</div></div>';
+    h += '<div class="stat-card"><div class="stat-val" style="color:var(--green)">' + actionable + '</div><div class="stat-label">Actionable</div></div>';
+    h += '<div class="stat-card"><div class="stat-val" style="color:var(--grey)">' + (counts['CMD/Noise'] || 0) + '</div><div class="stat-label">Noise</div></div>';
+    h += '</div>';
+  }
+  h += '</div>';
+
+  if (gmailLoading && !gmailData) {
+    h += '<div class="card" style="text-align:center;padding:40px"><div style="font-size:24px;margin-bottom:8px">⏳</div><div class="dim">Fetching your briefing...</div></div>';
+    return h;
+  }
+
+  if (gmailError) {
+    h += '<div class="card" style="border-color:rgba(239,68,68,0.3)"><div style="color:var(--red);font-weight:600;margin-bottom:4px">Connection Error</div><div class="dim" style="font-size:12px">' + esc(gmailError) + '</div>';
+    h += '<div class="dim mt-8" style="font-size:11px">Make sure the Apps Script is deployed as a web app with "Anyone" access.</div></div>';
+    return h;
+  }
+
+  if (!gmailData) {
+    h += '<div class="card" style="text-align:center;padding:40px"><div style="font-size:24px;margin-bottom:8px">📬</div>';
+    h += '<div style="font-weight:600;margin-bottom:4px">Ready for your briefing</div>';
+    h += '<div class="dim" style="font-size:12px;margin-bottom:16px">Hit refresh to pull the last 24 hours of classified emails.</div>';
+    h += '<button class="btn" onclick="fetchGmailBriefing(24)">Load Briefing</button></div>';
+    return h;
+  }
+
+  // Meeting Intelligence section (deal updates from Fathom)
+  if (gmailData.dealUpdates && gmailData.dealUpdates.length > 0) {
+    h += '<div class="card" style="border-color:rgba(201,162,39,0.4)">';
+    h += '<div class="flex-center gap-8 mb-8"><span style="font-size:16px">🎙️</span>';
+    h += '<span style="font-weight:700;color:var(--gold)">Meeting Intelligence</span>';
+    h += '<span class="dim" style="font-size:11px">' + gmailData.dealUpdates.length + '</span></div>';
+    gmailData.dealUpdates.forEach((update, idx) => {
+      const isDeal = true;
+      const existingDeal = state.opportunities.find(o =>
+        o.name.toLowerCase().includes(update.brandName.toLowerCase()) ||
+        update.brandName.toLowerCase().includes(o.name.toLowerCase())
+      );
+      h += '<div class="inner-card mb-8" style="padding:10px">';
+      h += '<div style="font-weight:600;font-size:13px;color:var(--gold)">' + esc(update.brandName) + '</div>';
+      h += '<div class="dim" style="font-size:11px">' + esc(update.contactName || '') + ' · ' + gmailTimeAgo(update.meetingDate) + ' · Stage: ' + esc(update.suggestedStage || '') + '</div>';
+      h += '<div style="font-size:12px;margin-top:4px;color:var(--text)">' + esc(update.dealSummary || '') + '</div>';
+      if (update.actionItems && update.actionItems.length > 0) {
+        h += '<div style="margin-top:6px;font-size:11px">';
+        update.actionItems.forEach(a => {
+          const ownerColor = a.owner === 'Sev' ? 'var(--yellow)' : 'var(--cyan)';
+          h += '<div style="color:' + ownerColor + '">→ ' + esc(a.task) + ' <span class="dim">(' + esc(a.owner) + ')</span></div>';
+        });
+        h += '</div>';
+      }
+      if (update.nextSteps) h += '<div style="font-size:11px;margin-top:4px;color:var(--green)">Next: ' + esc(update.nextSteps) + '</div>';
+      h += '<div class="flex gap-4" style="margin-top:8px">';
+      if (update.fathomUrl) h += '<button class="btn-ghost btn-sm" onclick="window.open(\'' + esc(update.fathomUrl) + '\',\'_blank\')">View Call</button>';
+      h += '<button class="btn-ghost btn-sm" style="color:var(--green);border-color:rgba(34,197,94,0.3)" onclick="gmailApplyDealUpdate(' + idx + ')">' + (existingDeal ? '↻ Update Deal' : '→ Pipeline') + '</button>';
+      h += '</div></div>';
+    });
+    h += '</div>';
+  }
+
+  // Meeting insights for advisory calls
+  if (gmailData.meetingInsights && gmailData.meetingInsights.length > 0) {
+    const advisoryInsights = gmailData.meetingInsights.filter(i => i.type === 'advisory');
+    if (advisoryInsights.length > 0) {
+      h += '<div class="card" style="border-color:rgba(99,179,237,0.3)">';
+      h += '<div class="flex-center gap-8 mb-8"><span style="font-size:16px">📚</span>';
+      h += '<span style="font-weight:700;color:var(--cyan)">Advisory Calls Processed</span></div>';
+      advisoryInsights.forEach(insight => {
+        h += '<div class="inner-card mb-8" style="padding:10px">';
+        h += '<div style="font-weight:600;font-size:13px">' + esc(insight.meetingTitle) + '</div>';
+        h += '<div class="dim" style="font-size:11px">' + gmailTimeAgo(insight.emailDate) + ' · ' + (insight.knowledgeEntries || []).length + ' knowledge entries extracted</div>';
+        h += '<div style="font-size:12px;margin-top:4px;color:var(--text)">' + esc(insight.topicsSummary || '') + '</div>';
+        if (insight.fathomUrl) h += '<div style="margin-top:6px"><button class="btn-ghost btn-sm" onclick="window.open(\'' + esc(insight.fathomUrl) + '\',\'_blank\')">View Call</button></div>';
+        h += '</div>';
+      });
+      if (gmailData.pendingKnowledgeHub > 0) {
+        h += '<div class="dim" style="font-size:11px;text-align:center;padding:4px">' + gmailData.pendingKnowledgeHub + ' call(s) pending Knowledge Hub push (needs GitHub token)</div>';
+      }
+      h += '</div>';
+    }
+  }
+
+  // Render each category (priority order)
+  const order = ['CMD/Opportunities', 'CMD/Actions', 'CMD/Client Updates', 'CMD/Finance', 'CMD/Admin', 'CMD/Noise'];
+  let noiseCollapsed = true;
+
+  order.forEach(cat => {
+    const items = gmailData.emails[cat] || [];
+    const meta = GMAIL_CATEGORIES[cat];
+    if (!meta) return;
+
+    const isNoise = cat === 'CMD/Noise';
+    const isEmpty = items.length === 0;
+
+    h += '<div class="card' + (isEmpty ? '' : '') + '" style="' + (isEmpty ? 'opacity:0.5' : '') + '">';
+    h += '<div class="flex-between mb-8" ' + (isNoise && items.length > 0 ? 'onclick="document.getElementById(\'noise-list\').classList.toggle(\'hidden\')" style="cursor:pointer"' : '') + '>';
+    h += '<div class="flex-center gap-8"><span style="font-size:16px">' + meta.icon + '</span>';
+    h += '<div><span style="font-weight:700;color:' + meta.color + '">' + meta.label + '</span>';
+    h += '<span class="dim" style="font-size:11px;margin-left:8px">' + items.length + '</span></div></div>';
+    if (isNoise && items.length > 0) h += '<span class="dim" style="font-size:11px">tap to expand</span>';
+    h += '</div>';
+
+    if (isEmpty) {
+      h += '<div class="dim" style="font-size:12px;padding:4px 0">Nothing here — all clear.</div>';
+    } else {
+      h += '<div ' + (isNoise ? 'id="noise-list" class="hidden"' : '') + '>';
+      items.forEach(email => {
+        const fromName = email.from.split('<')[0].trim().replace(/"/g, '');
+        h += '<div class="inner-card mb-8" style="padding:10px">';
+        h += '<div class="flex-between">';
+        h += '<div style="flex:1;min-width:0">';
+        h += '<div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(email.subject) + '</div>';
+        h += '<div class="dim" style="font-size:11px">' + esc(fromName) + ' · ' + gmailTimeAgo(email.date) + '</div>';
+        if (email.reason) h += '<div style="font-size:11px;color:' + meta.color + ';margin-top:2px;opacity:0.8">' + esc(email.reason) + '</div>';
+        h += '</div>';
+        h += '<div class="flex gap-4" style="margin-left:8px;flex-shrink:0">';
+        h += '<button class="btn-ghost btn-sm" onclick="gmailOpenThread(\'' + esc(email.threadId) + '\')" title="Open in Gmail">Open</button>';
+        if (!isNoise) h += '<button class="btn-ghost btn-sm" onclick="gmailSendToInbox(\'' + esc(email.subject.replace(/'/g, "\\'")) + '\',\'' + esc(fromName.replace(/'/g, "\\'")) + '\')" title="Add to GTD Inbox">→ Inbox</button>';
+        if (cat === 'CMD/Opportunities') h += '<button class="btn-ghost btn-sm" style="color:var(--green);border-color:rgba(34,197,94,0.3)" onclick="gmailAddToPipeline(\'' + esc(email.subject.replace(/'/g, "\\'")) + '\',\'' + esc(email.from.replace(/'/g, "\\'")) + '\')" title="Add to Deals pipeline">→ Pipeline</button>';
+        h += '</div></div></div>';
+      });
+      h += '</div>';
+    }
+    h += '</div>';
+  });
+
+  // Time filter buttons
+  h += '<div class="card" style="text-align:center">';
+  h += '<div class="dim mb-8" style="font-size:11px">Time range</div>';
+  h += '<div class="flex-center gap-8" style="justify-content:center">';
+  h += '<button class="btn-ghost btn-sm" onclick="fetchGmailBriefing(6)">6h</button>';
+  h += '<button class="btn-ghost btn-sm" onclick="fetchGmailBriefing(12)">12h</button>';
+  h += '<button class="btn-ghost btn-sm" onclick="fetchGmailBriefing(24)">24h</button>';
+  h += '<button class="btn-ghost btn-sm" onclick="fetchGmailBriefing(48)">48h</button>';
+  h += '<button class="btn-ghost btn-sm" onclick="fetchGmailBriefing(168)">7d</button>';
+  h += '</div></div>';
+
+  return h;
+}
+
 // ===== RENDER =====
 function render() {
   const c = computed(), lv = getLevel(state.xp), nlv = getNextLevel(state.xp);
@@ -399,6 +697,7 @@ function render() {
   TAB_LIST.forEach(t => {
     let badge = "";
     if (t.id === "inbox" && state.inbox.length > 0) badge = '<span class="badge">'+state.inbox.length+'</span>';
+    if (t.id === "gmail" && gmailData) { const ac = (gmailData.emails['CMD/Opportunities']||[]).length + (gmailData.emails['CMD/Actions']||[]).length; if (ac > 0) badge = '<span class="badge" style="background:var(--gold)">'+ac+'</span>'; }
     tabsH += '<button class="tab'+(currentTab===t.id?" active":"")+'" onclick="switchTab(\''+t.id+'\')">'+t.label+badge+'</button>';
   });
   document.getElementById("tabs").innerHTML = tabsH;
@@ -417,6 +716,7 @@ function render() {
     case "someday": el.innerHTML = renderSomeday(); break;
     case "review": el.innerHTML = renderReview(c); break;
     case "debrief": el.innerHTML = renderDebrief(); break;
+    case "gmail": el.innerHTML = renderGmail(); break;
     case "history": el.innerHTML = renderHistory(); break;
   }
 }
