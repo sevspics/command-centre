@@ -111,6 +111,14 @@ button:hover { opacity: 0.85; }
 .pull-indicator.loading .pull-text { display:none; }
 @keyframes spin { to { transform:rotate(360deg); } }
 
+.time-block { border-radius:8px;padding:10px 14px;margin-bottom:6px;border:1px solid var(--border);background:var(--bg2); }
+.time-block.active { border-color:var(--gold);background:linear-gradient(135deg,var(--bg3) 0%,var(--bg2) 100%); }
+.tier-badge { display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;font-size:11px;font-weight:700;flex-shrink:0; }
+.outreach-status { display:inline-block;border-radius:10px;padding:2px 10px;font-size:10px;font-weight:600; }
+.outreach-quick-actions { display:flex;gap:6px;flex-wrap:wrap;margin-top:8px; }
+.outreach-quick-actions button { font-size:11px; }
+.template-card { background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px; }
+
 .lock-screen { position:fixed;top:0;left:0;right:0;bottom:0;background:var(--bg);z-index:1000;display:flex;align-items:center;justify-content:center; }
 .lock-screen.hidden { display:none !important; }
 .lock-box { max-width:340px;width:90%;text-align:center; }
@@ -200,7 +208,7 @@ const REVIEW_ITEMS = [
   "Update opportunity stages and notes",
 ];
 const TAB_LIST = [
-  { id: "dashboard", label: "HQ" }, { id: "projects", label: "Projects" }, { id: "opportunities", label: "Deals" },
+  { id: "dashboard", label: "HQ" }, { id: "outreach", label: "Outreach" }, { id: "projects", label: "Projects" }, { id: "opportunities", label: "Deals" },
   { id: "sessions", label: "Sessions" }, { id: "commissions", label: "Commissions" },
   { id: "actions", label: "Actions" }, { id: "habits", label: "Habits" },
   { id: "inbox", label: "Inbox" }, { id: "someday", label: "Someday" }, { id: "review", label: "Review" },
@@ -208,7 +216,7 @@ const TAB_LIST = [
 ];
 
 // ===== STATE =====
-let state, history = [], currentTab = "dashboard", projectsSubTab = "professional";
+let state, history = [], currentTab = "dashboard", projectsSubTab = "professional", outreachSubTab = "today", outreachTierFilter = "all", outreachStatusFilter = "all";
 
 function defaultState() {
   return {
@@ -286,6 +294,14 @@ function fixArrays(obj) {
       if (!p.updates) p.updates = [];
     });
   }
+  // Fix outreach arrays
+  if (obj.outreach) {
+    if (obj.outreach.prospects && !Array.isArray(obj.outreach.prospects)) obj.outreach.prospects = Object.values(obj.outreach.prospects);
+    if (obj.outreach.prospects) obj.outreach.prospects.forEach(p => {
+      if (p.history && !Array.isArray(p.history)) p.history = Object.values(p.history);
+      if (!p.history) p.history = [];
+    });
+  }
 }
 async function loadFromFirebase() {
   const [dataSnap, histSnap] = await Promise.all([
@@ -309,6 +325,7 @@ async function loadFromFirebase() {
     if (!state.somedayMaybe) state.somedayMaybe = [];
     if (!state.projects) state.projects = def.projects;
     if (!state.debriefs) state.debriefs = [];
+    if (!state.outreach) state.outreach = defaultOutreach();
     fixArrays(state);
   }
   if (fbHist) {
@@ -399,6 +416,7 @@ function render() {
   TAB_LIST.forEach(t => {
     let badge = "";
     if (t.id === "inbox" && state.inbox.length > 0) badge = '<span class="badge">'+state.inbox.length+'</span>';
+    if (t.id === "outreach" && state.outreach) { const _oa = state.outreach.prospects.filter(p=>p.tier<=2&&p.status==="not_contacted").length; if (_oa) badge = '<span class="badge" style="background:var(--gold)">'+_oa+'</span>'; }
     tabsH += '<button class="tab'+(currentTab===t.id?" active":"")+'" onclick="switchTab(\''+t.id+'\')">'+t.label+badge+'</button>';
   });
   document.getElementById("tabs").innerHTML = tabsH;
@@ -407,6 +425,7 @@ function render() {
   const el = document.getElementById("content");
   switch(currentTab) {
     case "dashboard": el.innerHTML = renderDashboard(c, lv, nlv); break;
+    case "outreach": el.innerHTML = renderOutreach(); break;
     case "projects": el.innerHTML = renderProjects(); break;
     case "opportunities": el.innerHTML = renderOpportunities(); break;
     case "sessions": el.innerHTML = renderSessions(c); break;
@@ -884,6 +903,253 @@ function confirmDebrief() {
   state.debriefs.push({ date: new Date().toISOString(), text: text });
   save(); render();
 }
+
+// ===== OUTREACH =====
+const OUTREACH_STATUSES = {not_contacted:{label:"Not Contacted",color:"#6b7280"},message_sent:{label:"Message Sent",color:"#f59e0b"},followed_up:{label:"Followed Up",color:"#f97316"},called:{label:"Called",color:"#8b5cf6"},call_booked:{label:"Call Booked",color:"#06b6d4"},proper_call:{label:"Proper Call Done",color:"#3b82f6"},closed_won:{label:"Closed Won",color:"#22c55e"},not_interested:{label:"Not Interested",color:"#ef4444"}};
+const TIER_META = {1:{l:"Call This Week",c:"#ef4444"},2:{l:"Message This Week",c:"#f97316"},3:{l:"Warm / Lower",c:"#f59e0b"},4:{l:"Connections",c:"#8b5cf6"},5:{l:"Re-engage",c:"#6b7280"}};
+const OUTREACH_NEXT = {not_contacted:"Send Message",message_sent:"Send Follow-Up",followed_up:"Call Them",called:"Book Call",call_booked:"Proper Call Done",proper_call:"Send Payment Link"};
+const OUTREACH_TEMPLATES = [
+  {title:"Initial Message",text:"Hey, quick one. I\u2019m taking on two to three service businesses this month to help them build content that pre-sells prospects and increases website conversion in 60 days. Thought of you. Want me to walk you through it this week?"},
+  {title:"Same-Day Follow-Up",text:"Worth a quick look. I think there\u2019s a clear opportunity on your site. I can show you in 15 minutes."},
+  {title:"Call Script (Non-Responders)",text:"Hey, I sent you a message earlier. I had a quick idea on improving your site conversion. Do you have two minutes?"},
+  {title:"Booking the Proper Call",text:"I want to prepare something specific for you. Easier to show than explain. When are you free for 20 minutes?"},
+  {title:"Resistance Handler",text:"All good, I\u2019ll keep it quick. Most service sites are leaking conversions in two or three obvious places. Worth showing you. Worst case, you get a few ideas."},
+  {title:"Connections Ask (Tier 4)",text:"Hey, I\u2019m taking on two to three service businesses this month to help them build content that increases website conversion. Do you know anyone who might be a fit? Would love five names if you\u2019ve got them."},
+  {title:"Close on Spot",text:"Great, it\u2019ll be $2,500/month for the 3-month advisory. Here\u2019s the payment link."},
+];
+function defaultOutreach() {
+  return { prospects: [
+    {id:"p-mitch",name:"Mitch Brown",business:"Swimtech",tier:1,status:"not_contacted",notes:"Already keen on $2,500. Close him. Send the payment link.",lastContact:null,history:[]},
+    {id:"p-matthias",name:"Matthias",business:"Pipa (7 pizza shops)",tier:1,status:"not_contacted",notes:"Owns 7 pizza shops, already doing content. Perfect fit. Pitch advisory, not DFY.",lastContact:null,history:[]},
+    {id:"p-henry",name:"Henry Cooper",business:"(Connections play)",tier:1,status:"not_contacted",notes:"Not him, his connections. Ask for 5 intros.",lastContact:null,history:[]},
+    {id:"p-hursh",name:"Hursh",business:"",tier:1,status:"not_contacted",notes:"Already called, said he'd think about it. Follow up. Also ask for connections.",lastContact:null,history:[]},
+    {id:"p-erin",name:"Erin Holmes",business:"",tier:1,status:"not_contacted",notes:"Catch-up booked for Wednesday. Use it.",lastContact:null,history:[]},
+    {id:"p-kristine",name:"Kristine Dimatina",business:"",tier:1,status:"not_contacted",notes:"Was marked call Monday in March. Follow up now.",lastContact:null,history:[]},
+    {id:"p-zac",name:"Zac Duggan",business:"",tier:1,status:"not_contacted",notes:"Was pitching to his company and asking for contacts. Follow up.",lastContact:null,history:[]},
+    {id:"p-donna",name:"Donna Moala",business:"Baby Whisperer",tier:1,status:"not_contacted",notes:"Already messaged during Kieran session. Follow up today.",lastContact:null,history:[]},
+    {id:"p-living-oceans",name:"Living Oceans",business:"Living Oceans",tier:2,status:"not_contacted",notes:"Active client. Upsell to advisory or get a referral.",lastContact:null,history:[]},
+    {id:"p-dan",name:"Dan",business:"GOAT",tier:2,status:"not_contacted",notes:"May be making content himself, but can he increase website conversion alone? Probably not.",lastContact:null,history:[]},
+    {id:"p-azure",name:"Azure Dental",business:"Azure Dental",tier:2,status:"not_contacted",notes:"Service business. Fits the ICP.",lastContact:null,history:[]},
+    {id:"p-fox",name:"Fox Removals",business:"Fox Removals",tier:2,status:"not_contacted",notes:"Service business. Fits the ICP.",lastContact:null,history:[]},
+    {id:"p-sandy",name:"Sandy",business:"Scott Park Group",tier:2,status:"not_contacted",notes:"Service business.",lastContact:null,history:[]},
+    {id:"p-vivien",name:"Vivien Yap",business:"Real Estate",tier:2,status:"not_contacted",notes:"Real estate. Service business adjacent.",lastContact:null,history:[]},
+    {id:"p-jeremy",name:"Jeremy",business:"Student Edge",tier:2,status:"not_contacted",notes:"Depends on size. Worth a message.",lastContact:null,history:[]},
+    {id:"p-eden",name:"Eden ENVY",business:"Eden ENVY",tier:2,status:"not_contacted",notes:"Worth a message to assess fit.",lastContact:null,history:[]},
+    {id:"p-jarrod",name:"Jarrod Syme",business:"",tier:2,status:"not_contacted",notes:"Worth a message.",lastContact:null,history:[]},
+    {id:"p-fi",name:"Fi",business:"Glowdry",tier:2,status:"not_contacted",notes:"Service business.",lastContact:null,history:[]},
+    {id:"p-peta",name:"Peta Slocombe",business:"",tier:3,status:"not_contacted",notes:"Slow moving, budget unclear. Message but don't invest heavy time.",lastContact:null,history:[]},
+    {id:"p-dimitri",name:"Dimitri Servant",business:"Barber",tier:3,status:"not_contacted",notes:"Below 10-staff threshold. Could become a $350 session client.",lastContact:null,history:[]},
+    {id:"p-prash",name:"Prash Nayar",business:"REA",tier:3,status:"not_contacted",notes:"Cultural friction flagged. Message professionally.",lastContact:null,history:[]},
+    {id:"p-charlie",name:"Charlie Locksmith",business:"Locksmith",tier:3,status:"not_contacted",notes:"19yo, all over the place. Low priority.",lastContact:null,history:[]},
+    {id:"p-anthony",name:"Anthony Spagnolo",business:"Politician",tier:3,status:"not_contacted",notes:"Already wallet-checked, no budget. Low priority unless connections.",lastContact:null,history:[]},
+    {id:"p-paul-f",name:"Paul Faix",business:"",tier:3,status:"not_contacted",notes:"Partnership offer from March. Follow up.",lastContact:null,history:[]},
+    {id:"p-kody",name:"Kody Diegan",business:"(Connections)",tier:4,status:"not_contacted",notes:"Ask for referrals.",lastContact:null,history:[]},
+    {id:"p-tye",name:"Tye Davis",business:"(Connections)",tier:4,status:"not_contacted",notes:"Ask for referrals.",lastContact:null,history:[]},
+    {id:"p-ben-d",name:"Ben Dudley",business:"(Connections)",tier:4,status:"not_contacted",notes:"Ask for referrals.",lastContact:null,history:[]},
+    {id:"p-piotr",name:"Piotr Dancewicz",business:"(Connections)",tier:4,status:"not_contacted",notes:"Ask for referrals.",lastContact:null,history:[]},
+    {id:"p-cassandra",name:"Cassandra Emerson",business:"(Connections)",tier:4,status:"not_contacted",notes:"Ask for referrals.",lastContact:null,history:[]},
+    {id:"p-mike",name:"Mike Smith",business:"(Connections)",tier:4,status:"not_contacted",notes:"Ask for referrals.",lastContact:null,history:[]},
+    {id:"p-tracey",name:"Tracey Notton",business:"(Connections)",tier:4,status:"not_contacted",notes:"Ask for referrals.",lastContact:null,history:[]},
+    {id:"p-jennifer",name:"Jennifer Elliott",business:"",tier:5,status:"not_contacted",notes:"Standard outreach. Let them self-select.",lastContact:null,history:[]},
+    {id:"p-david-n",name:"David Norcross",business:"",tier:5,status:"not_contacted",notes:"",lastContact:null,history:[]},
+    {id:"p-aleksandra",name:"Aleksandra Todorivic",business:"",tier:5,status:"not_contacted",notes:"",lastContact:null,history:[]},
+    {id:"p-ai-adv",name:"AI Advancement",business:"AI Advancement",tier:5,status:"not_contacted",notes:"",lastContact:null,history:[]},
+    {id:"p-es",name:"Es",business:"Glide",tier:5,status:"not_contacted",notes:"",lastContact:null,history:[]},
+    {id:"p-terraze",name:"Terraze Ashfold",business:"",tier:5,status:"not_contacted",notes:"",lastContact:null,history:[]},
+    {id:"p-turnleft",name:"Turn Left For Less",business:"Turn Left For Less",tier:5,status:"not_contacted",notes:"",lastContact:null,history:[]},
+    {id:"p-steve",name:"Steve McMenamin",business:"",tier:5,status:"not_contacted",notes:"",lastContact:null,history:[]},
+    {id:"p-andy",name:"Andy Lamb",business:"",tier:5,status:"not_contacted",notes:"",lastContact:null,history:[]},
+    {id:"p-jason",name:"Jason",business:"(Car guy)",tier:5,status:"not_contacted",notes:"",lastContact:null,history:[]},
+    {id:"p-lucy",name:"Lucy",business:"Spacedraft",tier:5,status:"not_contacted",notes:"",lastContact:null,history:[]},
+    {id:"p-gabrielle",name:"Gabrielle Percic",business:"",tier:5,status:"not_contacted",notes:"",lastContact:null,history:[]},
+    {id:"p-tracy-f",name:"Tracy Fryer",business:"",tier:5,status:"not_contacted",notes:"",lastContact:null,history:[]},
+    {id:"p-corey",name:"Corey Green",business:"",tier:5,status:"not_contacted",notes:"",lastContact:null,history:[]},
+    {id:"p-daniel-p",name:"Daniel Principe",business:"",tier:5,status:"not_contacted",notes:"",lastContact:null,history:[]},
+    {id:"p-paul-d",name:"Paul Deuchar",business:"UseVerb",tier:5,status:"not_contacted",notes:"",lastContact:null,history:[]},
+    {id:"p-libby",name:"Libby",business:"(Liberal lady)",tier:5,status:"not_contacted",notes:"",lastContact:null,history:[]},
+    {id:"p-jacquie",name:"Jacquie",business:"Perth Happenings",tier:5,status:"not_contacted",notes:"No answer March 21.",lastContact:null,history:[]},
+    {id:"p-melanie",name:"Melanie",business:"Chapel Farm / Physio",tier:5,status:"not_contacted",notes:"",lastContact:null,history:[]},
+  ], log: {} };
+}
+// ===== OUTREACH RENDER =====
+function renderOutreach() {
+  if (!state.outreach) { state.outreach = defaultOutreach(); save(); }
+  const sub = outreachSubTab;
+  let h = '<div style="display:flex;gap:0;margin-bottom:16px;border:1px solid var(--border);border-radius:8px;overflow:hidden">';
+  ['today','prospects','playbook'].forEach(t => {
+    const lbl = {today:'Today',prospects:'Prospects',playbook:'Playbook'}[t];
+    const col = {today:'var(--gold)',prospects:'var(--cyan)',playbook:'var(--purple)'}[t];
+    const act = sub === t;
+    h += '<button onclick="switchOutreachSubTab(\''+t+'\')" style="flex:1;padding:10px 16px;font-size:13px;font-weight:'+(act?'700':'400')+';border:none;cursor:pointer;background:'+(act?col:'var(--bg2)')+';color:'+(act?'var(--bg)':'var(--dim)')+';font-family:inherit;transition:all 0.2s">'+lbl+'</button>';
+  });
+  h += '</div>';
+  if (sub === "today") h += renderOutreachToday();
+  else if (sub === "prospects") h += renderOutreachProspects();
+  else h += renderOutreachPlaybook();
+  return h;
+}
+function switchOutreachSubTab(t) { outreachSubTab = t; render(); }
+
+function renderOutreachToday() {
+  const ps = state.outreach.prospects;
+  const today = new Date().toISOString().slice(0,10);
+  if (!state.outreach.log[today]) state.outreach.log[today] = {messages:0,followUps:0,calls:0,booked:0};
+  const log = state.outreach.log[today];
+  const hour = new Date().getHours();
+  const active = ps.filter(p => p.status !== "closed_won" && p.status !== "not_interested");
+  const won = ps.filter(p => p.status === "closed_won");
+  let h = '<div class="grid-4 mb-12">'+[{l:"Messages",v:log.messages,c:"var(--gold)"},{l:"Follow-Ups",v:log.followUps,c:"var(--orange)"},{l:"Calls",v:log.calls,c:"var(--purple)"},{l:"Booked",v:log.booked,c:"var(--green)"}].map(s=>'<div class="card stat-card"><div class="stat-val" style="color:'+s.c+'">'+s.v+'</div><div class="stat-label">'+s.l+'</div></div>').join("")+'</div>';
+  h += '<div class="card card-accent mb-12"><div class="flex-between"><div><span style="font-weight:700;color:var(--gold)">'+active.length+'</span> <span class="dim">active prospects</span></div><div><span style="font-weight:700;color:var(--green)">'+won.length+'</span> <span class="dim">closed</span></div></div></div>';
+  h += '<div class="card mb-12"><div class="label">Daily Rhythm (14-Day Sprint)</div>';
+  [{t:"9am-11am",n:"OUTREACH",d:"Send 5-10 initial messages. Use the templates.",a:hour>=9&&hour<11},{t:"2pm-4pm",n:"FOLLOW-UPS & CALLS",d:"Follow up on mornings. Call non-responders from yesterday.",a:hour>=14&&hour<16},{t:"4pm-5pm",n:"ADMIN",d:"Update statuses, log notes, prep for tomorrow.",a:hour>=16&&hour<17}].forEach(b => {
+    h += '<div class="time-block'+(b.a?' active':'')+'"><div class="flex-between"><span style="font-weight:600;color:'+(b.a?'var(--gold)':'var(--dim)')+'">'+b.t+' '+b.n+'</span>'+(b.a?'<span style="color:var(--gold);font-size:11px;font-weight:700;animation:pulse 2s infinite">NOW</span>':'')+'</div><div class="dim" style="font-size:12px">'+b.d+'</div></div>';
+  });
+  h += '</div>';
+  [{label:"CLOSE NOW",color:"var(--green)",items:ps.filter(p=>p.status==="proper_call")},{label:"CALLS BOOKED - PREPARE",color:"var(--cyan)",items:ps.filter(p=>p.status==="call_booked")},{label:"FOLLOW UP",color:"var(--orange)",items:ps.filter(p=>p.status==="message_sent")},{label:"CALL THEM",color:"var(--purple)",items:ps.filter(p=>p.status==="followed_up")},{label:"SEND INITIAL MESSAGE",color:"var(--gold)",items:ps.filter(p=>p.status==="not_contacted").sort((a,b)=>a.tier-b.tier)},{label:"CALLED - AWAITING",color:"var(--dim)",items:ps.filter(p=>p.status==="called")}].forEach(g => {
+    if (!g.items.length) return;
+    h += '<div class="label mt-16" style="color:'+g.color+'">'+g.label+' ('+g.items.length+')</div>';
+    g.items.forEach(p => { h += renderProspectCard(p, true); });
+  });
+  if (won.length) { h += '<div class="label mt-16 dim">CLOSED WON ('+won.length+')</div>'; won.forEach(p => { h += renderProspectCard(p, false); }); }
+  return h;
+}
+
+function renderProspectCard(p, showActions) {
+  const st = OUTREACH_STATUSES[p.status] || OUTREACH_STATUSES.not_contacted;
+  const tm = TIER_META[p.tier] || TIER_META[5];
+  const next = OUTREACH_NEXT[p.status];
+  let h = '<div class="card" style="border-left:3px solid '+st.color+'">';
+  h += '<div class="flex-between mb-4"><div class="flex-center gap-8"><span class="tier-badge" style="background:'+tm.c+'22;color:'+tm.c+'">'+p.tier+'</span><div><span style="font-weight:600">'+esc(p.name)+'</span>';
+  if (p.business) h += ' <span class="dim" style="font-size:12px">'+esc(p.business)+'</span>';
+  h += '</div></div><span class="outreach-status" style="background:'+st.color+'22;color:'+st.color+'">'+st.label+'</span></div>';
+  if (p.notes) h += '<div class="dim mb-4" style="font-size:12px">'+esc(p.notes)+'</div>';
+  if (p.lastContact) h += '<div class="dim" style="font-size:10px">Last: '+fmtDate(p.lastContact)+'</div>';
+  if (showActions !== false && p.status !== "closed_won") {
+    h += '<div class="outreach-quick-actions">';
+    if (next) h += '<button class="btn btn-sm" onclick="event.stopPropagation();advanceProspect(\''+p.id+'\')">'+next+'</button>';
+    h += '<button class="btn-ghost btn-sm" onclick="event.stopPropagation();editProspectNotes(\''+p.id+'\')">Note</button>';
+    h += '<button class="btn-ghost btn-sm" onclick="event.stopPropagation();toggleProspectHistory(\''+p.id+'\')">History</button>';
+    if (p.status !== "not_contacted" && p.status !== "not_interested") h += '<button class="btn-ghost btn-sm btn-danger" onclick="event.stopPropagation();markNotInterested(\''+p.id+'\')">Pass</button>';
+    if (p.status === "not_interested") h += '<button class="btn-ghost btn-sm" style="color:var(--cyan)" onclick="event.stopPropagation();reactivateProspect(\''+p.id+'\')">Reactivate</button>';
+    h += '</div>';
+  }
+  h += '<div id="ph-'+p.id+'" class="hidden mt-8" style="border-top:1px solid var(--border);padding-top:8px">';
+  if (p.history && p.history.length) { p.history.slice().reverse().forEach(e => { const ec = (OUTREACH_STATUSES[e.action]||{}).color||'var(--text)'; const el = (OUTREACH_STATUSES[e.action]||{}).label||e.action; h += '<div style="padding:4px 0;font-size:12px"><span class="dim">'+fmtDate(e.date)+'</span> <span style="color:'+ec+'">'+esc(el)+'</span>'+(e.note?' - '+esc(e.note):'')+'</div>'; }); } else { h += '<div class="dim" style="font-size:12px">No history yet.</div>'; }
+  h += '<div class="flex gap-8 mt-8 flex-wrap"><select class="select" style="font-size:11px;padding:4px 8px" onchange="setProspectStatus(\''+p.id+'\',this.value)">';
+  Object.entries(OUTREACH_STATUSES).forEach(([k,v]) => { h += '<option value="'+k+'"'+(p.status===k?' selected':'')+'>'+v.label+'</option>'; });
+  h += '</select><select class="select" style="font-size:11px;padding:4px 8px" onchange="changeProspectTier(\''+p.id+'\',this.value)">';
+  [1,2,3,4,5].forEach(t => { h += '<option value="'+t+'"'+(p.tier===t?' selected':'')+'>Tier '+t+'</option>'; });
+  h += '</select><button class="btn-ghost btn-sm btn-danger" onclick="removeProspect(\''+p.id+'\')">Remove</button></div></div></div>';
+  return h;
+}
+
+function renderOutreachProspects() {
+  const ps = state.outreach.prospects;
+  let h = '<div class="card mb-12"><div class="flex gap-8 flex-wrap"><select class="select" onchange="outreachTierFilter=this.value;render()"><option value="all"'+(outreachTierFilter==="all"?' selected':'')+'>All Tiers</option>';
+  [1,2,3,4,5].forEach(t => { h += '<option value="'+t+'"'+(outreachTierFilter==t?' selected':'')+'>Tier '+t+' - '+TIER_META[t].l+'</option>'; });
+  h += '</select><select class="select" onchange="outreachStatusFilter=this.value;render()"><option value="all"'+(outreachStatusFilter==="all"?' selected':'')+'>All Statuses</option>';
+  Object.entries(OUTREACH_STATUSES).forEach(([k,v]) => { h += '<option value="'+k+'"'+(outreachStatusFilter===k?' selected':'')+'>'+v.label+'</option>'; });
+  h += '</select><button class="btn" onclick="document.getElementById(\'add-prospect\').classList.toggle(\'hidden\')">+ Add</button></div></div>';
+  h += '<div id="add-prospect" class="card hidden mb-12" style="border-color:var(--gold-dim)"><input class="input mb-8" id="pr-name" placeholder="Name"><input class="input mb-8" id="pr-biz" placeholder="Business"><select class="select mb-8" id="pr-tier" style="width:100%"><option value="1">Tier 1 - Call This Week</option><option value="2">Tier 2 - Message This Week</option><option value="3">Tier 3 - Warm / Lower</option><option value="4">Tier 4 - Connections</option><option value="5">Tier 5 - Re-engage</option></select><textarea class="input mb-8" id="pr-notes" placeholder="Notes" rows="2"></textarea><button class="btn" onclick="addProspect()">Add Prospect</button></div>';
+  let filtered = ps;
+  if (outreachTierFilter !== "all") filtered = filtered.filter(p => p.tier == outreachTierFilter);
+  if (outreachStatusFilter !== "all") filtered = filtered.filter(p => p.status === outreachStatusFilter);
+  const counts = {}; filtered.forEach(p => { counts[p.status] = (counts[p.status]||0) + 1; });
+  h += '<div class="flex gap-8 flex-wrap mb-12">'; Object.entries(counts).forEach(([k,v]) => { const s = OUTREACH_STATUSES[k]; h += '<span class="outreach-status" style="background:'+s.color+'22;color:'+s.color+'">'+s.label+': '+v+'</span>'; }); h += '</div>';
+  [1,2,3,4,5].forEach(tier => {
+    const tp = filtered.filter(p => p.tier === tier); if (!tp.length) return;
+    const tm = TIER_META[tier];
+    h += '<div class="label mt-16" style="color:'+tm.c+'">TIER '+tier+' - '+tm.l.toUpperCase()+' ('+tp.length+')</div>';
+    tp.forEach(p => { h += renderProspectCard(p, true); });
+  });
+  if (!filtered.length) h += '<div class="text-center dim" style="padding:40px">No prospects match filters.</div>';
+  return h;
+}
+// ===== OUTREACH PLAYBOOK & ACTIONS =====
+function renderOutreachPlaybook() {
+  let h = '<div class="card card-accent mb-12"><div class="label">YOUR OFFER</div>';
+  h += '<div style="font-weight:700;font-size:16px;color:var(--gold);margin-bottom:8px">3-Month Advisory - $2,500/mo</div>';
+  h += '<div class="dim mb-4" style="font-size:13px"><b style="color:var(--text)">Positioning:</b> Helps service businesses build content that pre-sells prospects and increases website conversion.</div>';
+  h += '<div class="dim mb-4" style="font-size:13px"><b style="color:var(--text)">Outcome:</b> Build content that pre-sells prospects and increases website conversion in 60 days.</div>';
+  h += '<div class="dim" style="font-size:13px"><b style="color:var(--text)">Includes:</b> Weekly 1hr call, WhatsApp access, your systems and structures, intros to vetted specialists (Dave for websites, etc.)</div></div>';
+  h += '<div class="label mt-16">MESSAGE TEMPLATES (tap to copy)</div>';
+  OUTREACH_TEMPLATES.forEach((t,i) => {
+    h += '<div class="template-card"><div class="flex-between mb-4"><span style="font-weight:600;font-size:13px">'+esc(t.title)+'</span><button class="btn btn-sm" onclick="copyTemplate('+i+')">Copy</button></div>';
+    h += '<div class="dim" style="font-size:13px;white-space:pre-wrap">'+esc(t.text)+'</div></div>';
+  });
+  h += '<div class="label mt-16">SALES CALL STRUCTURE</div><div class="card"><div style="font-size:13px">';
+  h += '<div class="mb-8"><b style="color:var(--gold)">1. Frame:</b> "This will be quick. I want to understand what is going on, show you where you are leaking conversions, and if it makes sense, we talk about fixing it."</div>';
+  h += '<div class="mb-8"><b style="color:var(--gold)">2. Diagnose:</b> Ask the qualifying questions below.</div>';
+  h += '<div class="mb-8"><b style="color:var(--gold)">3. Gap:</b> "So right now you are getting traffic, but it is not converting properly. You are paying for attention that is not turning into revenue."</div>';
+  h += '<div class="mb-8"><b style="color:var(--gold)">4. Solution:</b> "We build content that answers the exact questions your buyers already have. By the time they land on your site, they have already pre-sold themselves."</div>';
+  h += '<div class="mb-8"><b style="color:var(--gold)">5. Offer:</b> "I recommend we work together over three months. Weekly session plus WhatsApp support. $2,500 a month."</div>';
+  h += '<div><b style="color:var(--gold)">6. Handle:</b> Use objection handlers below.</div></div></div>';
+  h += '<div class="label mt-16">QUALIFYING QUESTIONS</div><div class="card"><div style="font-size:13px">';
+  ["Where are your leads currently coming from?","How does your website convert right now?","Do you know if your business is showing up in AI search?","How long is your sales cycle? Lots of back-and-forth before someone buys?","Of word of mouth, ads, networking, and organic content - which gets you leads and which are you avoiding?","How often do you update your website?","How many questions do leads ask before they buy?","Have you spent money on an agency before? What happened?"].forEach(q => { h += '<div class="section-divider" style="padding:6px 0">'+esc(q)+'</div>'; });
+  h += '</div></div>';
+  h += '<div class="label mt-16">OBJECTION HANDLERS</div><div class="card"><div style="font-size:13px">';
+  h += '<div class="mb-8"><b style="color:var(--orange)">Price hesitation:</b> "What would you need to see to feel confident this is worth it?"</div>';
+  h += '<div class="mb-8"><b style="color:var(--orange)">Stalling:</b> "What is holding you back from making a decision today?"</div>';
+  h += '<div class="mb-8"><b style="color:var(--orange)">Website cost:</b> "There are usually some website changes needed. We identify exactly what early on. You can do it internally or I connect you with someone."</div>';
+  h += '<div><b style="color:var(--orange)">Agency burn:</b> "This is not an agency model. You build the system with me guiding you. Different model, different outcome."</div></div></div>';
+  h += '<div class="label mt-16">ACTION ITEMS (Kieran Session)</div><div class="card"><div style="font-size:13px">';
+  ["Email Matt at BTS about advisory upsell with revenue share.","Talk to Dave about MVP single-page website cost. Need well under $5,000.","Close Mitch Brown. Send the payment link.","Message Henry Cooper asking for 5 intros.","Follow up with everyone messaged during session. Call non-responders at 4pm.","Work through Tier 1 and Tier 2 this week. 5 messages/day = done by Friday.","Blast standard outreach to Tier 5 over the weekend."].forEach(a => { h += '<div class="section-divider" style="padding:6px 0">'+esc(a)+'</div>'; });
+  h += '</div></div>';
+  return h;
+}
+function copyTemplate(idx) {
+  if (idx >= 0 && idx < OUTREACH_TEMPLATES.length) {
+    navigator.clipboard.writeText(OUTREACH_TEMPLATES[idx].text).then(() => {
+      const el = document.getElementById("xp-popup"); el.textContent = "Copied to clipboard!"; el.classList.remove("hidden"); setTimeout(() => el.classList.add("hidden"), 1500);
+    }).catch(() => {});
+  }
+}
+function advanceProspect(id) {
+  const p = state.outreach.prospects.find(x => x.id === id); if (!p) return;
+  const flow = ["not_contacted","message_sent","followed_up","called","call_booked","proper_call","closed_won"];
+  const idx = flow.indexOf(p.status); if (idx < 0 || idx >= flow.length - 1) return;
+  const ns = flow[idx + 1]; const today = new Date().toISOString().slice(0,10);
+  p.status = ns; p.lastContact = new Date().toISOString();
+  if (!p.history) p.history = []; p.history.push({ date: new Date().toISOString(), action: ns, note: "" });
+  if (!state.outreach.log[today]) state.outreach.log[today] = {messages:0,followUps:0,calls:0,booked:0};
+  const log = state.outreach.log[today];
+  if (ns === "message_sent") log.messages++;
+  else if (ns === "followed_up") log.followUps++;
+  else if (ns === "called" || ns === "proper_call") log.calls++;
+  else if (ns === "call_booked") log.booked++;
+  if (ns === "closed_won") addXP(500, "PROSPECT CLOSED!");
+  else if (ns === "call_booked") addXP(50, "Call Booked!");
+  else addXP(15, "Outreach Progress");
+  save(); render();
+}
+function markNotInterested(id) {
+  const p = state.outreach.prospects.find(x => x.id === id); if (!p) return;
+  p.status = "not_interested"; p.lastContact = new Date().toISOString();
+  if (!p.history) p.history = []; p.history.push({ date: new Date().toISOString(), action: "not_interested", note: "" });
+  save(); render();
+}
+function reactivateProspect(id) {
+  const p = state.outreach.prospects.find(x => x.id === id); if (!p) return;
+  p.status = "not_contacted";
+  if (!p.history) p.history = []; p.history.push({ date: new Date().toISOString(), action: "reactivated", note: "Re-added to outreach" });
+  save(); render();
+}
+function editProspectNotes(id) { const p = state.outreach.prospects.find(x => x.id === id); if (!p) return; const n = prompt("Notes:", p.notes); if (n !== null) { p.notes = n; save(); render(); } }
+function toggleProspectHistory(id) { const el = document.getElementById("ph-" + id); if (el) el.classList.toggle("hidden"); }
+function setProspectStatus(id, status) {
+  const p = state.outreach.prospects.find(x => x.id === id); if (!p) return;
+  p.status = status; p.lastContact = new Date().toISOString();
+  if (!p.history) p.history = []; p.history.push({ date: new Date().toISOString(), action: status, note: "Manual change" });
+  save(); render();
+}
+function changeProspectTier(id, tier) { const p = state.outreach.prospects.find(x => x.id === id); if (p) { p.tier = +tier; save(); render(); } }
+function removeProspect(id) { if (!confirm("Remove this prospect?")) return; state.outreach.prospects = state.outreach.prospects.filter(p => p.id !== id); save(); render(); }
+function addProspect() {
+  const name = document.getElementById("pr-name").value.trim(); if (!name) return;
+  state.outreach.prospects.push({ id: uid(), name: name, business: document.getElementById("pr-biz").value.trim(), tier: +document.getElementById("pr-tier").value, status: "not_contacted", notes: document.getElementById("pr-notes").value, lastContact: null, history: [] });
+  save(); render();
+}
+function showAddProspect() { const el = document.getElementById("add-prospect"); if (el) el.classList.toggle("hidden"); }
 
 // ===== HISTORY =====
 function renderHistory() {
