@@ -210,7 +210,7 @@ const TAB_LIST = [
   { id: "sessions", label: "Sessions" }, { id: "commissions", label: "Commissions" },
   { id: "actions", label: "Actions" }, { id: "habits", label: "Habits" },
   { id: "inbox", label: "Inbox" }, { id: "someday", label: "Someday" }, { id: "review", label: "Review" },
-  { id: "debrief", label: "Debrief" }, { id: "history", label: "History" },
+  { id: "debrief", label: "Debrief" }, { id: "knowledge", label: "Knowledge" }, { id: "history", label: "History" },
 ];
 
 // ===== STATE =====
@@ -248,6 +248,12 @@ function defaultState() {
     sessions: [{ id: "abbey", name: "Abbey", package: "4-pack", price: 1200, sessionsTotal: 4, sessionsUsed: 3, notes: "3rd call done. 1 session remaining." }],
     commissions: [],
     debriefs: [],
+    // Fathom integration: meetings the webhook couldn't auto-match to a client
+    unmatchedMeetings: [],
+    // Fathom integration: advisory / internal / training calls (searchable hub)
+    knowledgeBase: [],
+    // Sync metadata (last webhook timestamp, dedupe index, etc.)
+    fathomMeta: {},
   };
 }
 
@@ -276,7 +282,7 @@ function saveHistory() {
   }, 500);
 }
 function loadLocal() {
-  try { const s = localStorage.getItem(STORAGE_KEY); if (s) { state = JSON.parse(s); if (!state.sessions) state.sessions = defaultState().sessions; if (!state.commissions) state.commissions = []; if (!state.projects) state.projects = []; if (!state.debriefs) state.debriefs = []; if (!state.dismissedEmails) state.dismissedEmails = []; if (!state.clientEmailMap) state.clientEmailMap = {}; } else state = defaultState(); } catch(e) { state = defaultState(); }
+  try { const s = localStorage.getItem(STORAGE_KEY); if (s) { state = JSON.parse(s); if (!state.sessions) state.sessions = defaultState().sessions; if (!state.commissions) state.commissions = []; if (!state.projects) state.projects = []; if (!state.debriefs) state.debriefs = []; if (!state.dismissedEmails) state.dismissedEmails = []; if (!state.clientEmailMap) state.clientEmailMap = {}; if (!state.unmatchedMeetings) state.unmatchedMeetings = []; if (!state.knowledgeBase) state.knowledgeBase = []; if (!state.fathomMeta) state.fathomMeta = {}; } else state = defaultState(); } catch(e) { state = defaultState(); }
   try { const h = localStorage.getItem(HISTORY_KEY); if (h) history = JSON.parse(h); } catch(e) {}
   ensureOppFields();
 }
@@ -291,7 +297,7 @@ function ensureOppFields() {
   }
 }
 function fixArrays(obj) {
-  const keys = ['opportunities','inbox','habits','sessions','commissions','waitingFor','somedayMaybe','projects','debriefs','dismissedEmails'];
+  const keys = ['opportunities','inbox','habits','sessions','commissions','waitingFor','somedayMaybe','projects','debriefs','dismissedEmails','unmatchedMeetings','knowledgeBase'];
   keys.forEach(k => { if (obj[k] && !Array.isArray(obj[k])) obj[k] = Object.values(obj[k]); });
   if (obj.weeklyActions) {
     Object.keys(obj.weeklyActions).forEach(k => {
@@ -305,12 +311,32 @@ function fixArrays(obj) {
       if (!p.updates) p.updates = [];
     });
   }
-  // Fix contacts arrays inside opportunities
+  // Fix contacts arrays inside opportunities + the meetings array we added for Fathom
   if (obj.opportunities && Array.isArray(obj.opportunities)) {
     obj.opportunities.forEach(o => {
       if (o.contacts && !Array.isArray(o.contacts)) o.contacts = Object.values(o.contacts);
+      if (o.meetings && !Array.isArray(o.meetings)) o.meetings = Object.values(o.meetings);
+      if (o.meetings && Array.isArray(o.meetings)) {
+        o.meetings.forEach(m => {
+          if (m.attendees && !Array.isArray(m.attendees)) m.attendees = Object.values(m.attendees);
+          if (m.actionItems && !Array.isArray(m.actionItems)) m.actionItems = Object.values(m.actionItems);
+          if (m.tags && !Array.isArray(m.tags)) m.tags = Object.values(m.tags);
+          if (m.topics && !Array.isArray(m.topics)) m.topics = Object.values(m.topics);
+        });
+      }
     });
   }
+  // Fix Fathom-generated arrays (Firebase serialises empty arrays as undefined)
+  ['unmatchedMeetings','knowledgeBase'].forEach(k => {
+    if (obj[k] && Array.isArray(obj[k])) {
+      obj[k].forEach(m => {
+        if (m.attendees && !Array.isArray(m.attendees)) m.attendees = Object.values(m.attendees);
+        if (m.actionItems && !Array.isArray(m.actionItems)) m.actionItems = Object.values(m.actionItems);
+        if (m.tags && !Array.isArray(m.tags)) m.tags = Object.values(m.tags);
+        if (m.topics && !Array.isArray(m.topics)) m.topics = Object.values(m.topics);
+      });
+    }
+  });
 }
 async function loadFromFirebase() {
   const [dataSnap, histSnap] = await Promise.all([
@@ -336,6 +362,9 @@ async function loadFromFirebase() {
     if (!state.debriefs) state.debriefs = [];
     if (!state.dismissedEmails) state.dismissedEmails = [];
     if (!state.clientEmailMap) state.clientEmailMap = {};
+    if (!state.unmatchedMeetings) state.unmatchedMeetings = [];
+    if (!state.knowledgeBase) state.knowledgeBase = [];
+    if (!state.fathomMeta) state.fathomMeta = {};
     fixArrays(state);
     ensureOppFields();
   }
@@ -879,11 +908,20 @@ function render() {
   let tabsH = "";
   TAB_LIST.forEach(t => {
     let badge = "";
-    if (t.id === "inbox" && state.inbox.length > 0) badge = '<span class="badge">'+state.inbox.length+'</span>';
+    if (t.id === "inbox") {
+      const inboxCount = state.inbox.length;
+      const unmatchedCount = (state.unmatchedMeetings || []).length;
+      const total = inboxCount + unmatchedCount;
+      if (total > 0) badge = '<span class="badge"' + (unmatchedCount > 0 ? ' style="background:var(--orange)"' : '') + '>'+total+'</span>';
+    }
     if (t.id === "gmail" && gmailData) {
       const dismissed = state.dismissedEmails || [];
       const ac = (gmailData.emails['CMD/Opportunities']||[]).filter(e => !dismissed.includes(e.threadId)).length + (gmailData.emails['CMD/Actions']||[]).filter(e => !dismissed.includes(e.threadId)).length;
       if (ac > 0) badge = '<span class="badge" style="background:var(--gold)">'+ac+'</span>';
+    }
+    if (t.id === "knowledge") {
+      const kc = (state.knowledgeBase || []).length;
+      if (kc > 0) badge = '<span class="badge" style="background:var(--cyan)">'+kc+'</span>';
     }
     tabsH += '<button class="tab'+(currentTab===t.id?" active":"")+'" onclick="switchTab(\''+t.id+'\')">'+t.label+badge+'</button>';
   });
@@ -904,6 +942,7 @@ function render() {
     case "review": el.innerHTML = renderReview(c); break;
     case "debrief": el.innerHTML = renderDebrief(); break;
     case "gmail": el.innerHTML = renderGmail(); break;
+    case "knowledge": el.innerHTML = renderKnowledge(); break;
     case "history": el.innerHTML = renderHistory(); break;
   }
 }
@@ -1130,7 +1169,9 @@ function renderOpportunities() {
         h += '<div class="flex-between"><div class="flex-center gap-8"><span class="health-dot" style="background:'+health.color+'"></span><span style="font-weight:600">'+esc(opp.name)+'</span>'+tagHTML(opp.type, STAGE_COLORS[si])+'</div>'+(opp.monthlyValue>0?'<span class="gold" style="font-weight:600">$'+opp.monthlyValue.toLocaleString()+'/mo</span>':'')+'</div>';
         if (opp.nextAction) h += '<div style="font-size:12px;margin-top:4px;color:var(--yellow)">Next: ' + esc(opp.nextAction) + '</div>';
         if (opp.lastContact) h += '<div class="dim" style="font-size:11px;margin-top:2px">Last contact: ' + health.label + '</div>';
+        h += renderStageSuggestionBadge(opp); // Fathom: surface a one-click stage update if a recent meeting suggests advancement
         h += progressHTML((si/(STAGES.length-1))*100, STAGE_COLORS[si], 4);
+        h += renderClientMeetingsSection(opp); // Fathom: show recent meetings inline (collapsible)
         h += renderOppEditPanel(opp);
         h += '</div>';
       });
@@ -1173,6 +1214,10 @@ function renderOpportunities() {
         });
         h += '</div>';
       }
+
+      // Fathom: stage suggestion badge + recent meetings (inline)
+      h += renderStageSuggestionBadge(opp);
+      h += renderClientMeetingsSection(opp);
 
       // Quick actions
       h += '<div class="flex gap-8 flex-wrap">';
@@ -1419,6 +1464,11 @@ function habitMinus(id) {
 // ===== INBOX =====
 function renderInbox() {
   let h = '<h3 class="mb-4">GTD Inbox</h3><p class="dim mb-16" style="font-size:13px">Process each item. Goal: zero.</p>';
+
+  // Fathom: Unmatched meetings — meetings the webhook couldn't auto-match to a client.
+  // These appear here so you assign them before they pile up.
+  h += renderUnmatchedMeetingsSection();
+
   h += '<div class="flex gap-8 mb-16"><input class="input flex-1" id="inbox-text" placeholder="Capture anything..." onkeydown="if(event.key===\'Enter\')inboxCapture()"><button class="btn" onclick="inboxCapture()">Capture</button></div>';
   if(!state.inbox.length) h += '<div class="text-center" style="padding:40px"><div style="font-size:32px;margin-bottom:8px">Inbox Zero</div><div class="dim">Your mind is clear.</div></div>';
   state.inbox.forEach(item => {
@@ -1520,6 +1570,289 @@ function confirmDebrief() {
 }
 
 // ===== HISTORY =====
+// ===== FATHOM INTEGRATION (UI helpers + renderers) =====
+// All Fathom data is written into Firebase by the Vercel webhook function.
+// This block is purely render/edit logic for the data already on state.
+
+function meetingTimeAgo(iso) {
+  if (!iso) return '';
+  const d = new Date(iso); if (isNaN(d.getTime())) return '';
+  const ms = Date.now() - d.getTime();
+  const min = Math.floor(ms/60000); const hr = Math.floor(min/60); const day = Math.floor(hr/24);
+  if (min < 60) return min + 'm ago';
+  if (hr < 24) return hr + 'h ago';
+  if (day < 7) return day + 'd ago';
+  return d.toLocaleDateString('en-AU', { day:'numeric', month:'short' });
+}
+
+function meetingsSorted(meetings) {
+  return (meetings || []).slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+}
+
+/** Pull the latest meeting whose suggestedStage advances past the opp's current stage. */
+function latestStageSuggestion(opp) {
+  if (!opp.meetings || !opp.meetings.length) return null;
+  const sorted = meetingsSorted(opp.meetings);
+  for (const m of sorted) {
+    if (m.suggestionApplied) continue;
+    if (!m.suggestedStage) continue;
+    const idx = STAGES.indexOf(m.suggestedStage);
+    if (idx > opp.stage) return { meeting: m, stageIndex: idx, stageName: m.suggestedStage };
+  }
+  return null;
+}
+
+function renderStageSuggestionBadge(opp) {
+  const sug = latestStageSuggestion(opp);
+  if (!sug) return '';
+  return '<div class="flex-center gap-8 mt-8" style="padding:8px;background:rgba(201,162,39,0.1);border:1px dashed var(--gold-dim);border-radius:6px" onclick="event.stopPropagation()">' +
+    '<span style="font-size:11px;color:var(--gold);font-weight:600">FATHOM SUGGESTS</span>' +
+    '<span style="font-size:12px;flex:1">Move to <b>' + esc(sug.stageName) + '</b> based on "' + esc(sug.meeting.title) + '"</span>' +
+    '<button class="btn-ghost btn-sm" onclick="applyMeetingStageSuggestion(\''+opp.id+'\',\''+esc(sug.meeting.fathomId)+'\')">Apply</button>' +
+    '<button class="btn-ghost btn-sm dim" onclick="dismissMeetingStageSuggestion(\''+opp.id+'\',\''+esc(sug.meeting.fathomId)+'\')">Dismiss</button>' +
+    '</div>';
+}
+
+function applyMeetingStageSuggestion(oppId, fathomId) {
+  const opp = state.opportunities.find(o => o.id === oppId); if (!opp) return;
+  const m = (opp.meetings || []).find(x => x.fathomId === fathomId); if (!m || !m.suggestedStage) return;
+  const idx = STAGES.indexOf(m.suggestedStage); if (idx < 0) return;
+  if (idx > opp.stage) addXP(XP_VALUES.deal_advance, "Deal Advanced");
+  if (idx >= 4 && opp.stage < 4) addXP(XP_VALUES.deal_close, "DEAL CLOSED!");
+  opp.stage = idx;
+  m.suggestionApplied = true;
+  save(); render();
+}
+
+function dismissMeetingStageSuggestion(oppId, fathomId) {
+  const opp = state.opportunities.find(o => o.id === oppId); if (!opp) return;
+  const m = (opp.meetings || []).find(x => x.fathomId === fathomId); if (!m) return;
+  m.suggestionApplied = true;
+  save(); render();
+}
+
+/** Inline meetings list on each client card — collapsible, last 5 shown. */
+function renderClientMeetingsSection(opp) {
+  const meetings = meetingsSorted(opp.meetings);
+  if (!meetings.length) return '';
+  const visible = meetings.slice(0, 5);
+  const sectionId = 'meetings-' + opp.id;
+  let h = '<div class="mt-8" onclick="event.stopPropagation()">';
+  h += '<div class="flex-between" style="cursor:pointer" onclick="document.getElementById(\''+sectionId+'\').classList.toggle(\'hidden\')">';
+  h += '<span class="dim" style="font-size:10px">RECENT MEETINGS · ' + meetings.length + '</span>';
+  h += '<span class="dim" style="font-size:10px">tap to expand</span></div>';
+  h += '<div id="'+sectionId+'" class="hidden mt-4">';
+  visible.forEach(m => { h += renderMeetingRow(m, opp.id); });
+  if (meetings.length > visible.length) {
+    h += '<div class="dim text-center" style="font-size:11px;padding:4px">+ ' + (meetings.length - visible.length) + ' more (Knowledge tab)</div>';
+  }
+  h += '</div></div>';
+  return h;
+}
+
+/** A single meeting row used inside Active Clients, Pipeline cards, and Knowledge Hub. */
+function renderMeetingRow(m, contextId) {
+  const detailsId = 'mtg-' + (contextId || 'k') + '-' + m.fathomId.replace(/[^a-zA-Z0-9]/g, '');
+  let h = '<div class="inner-card mb-4" style="padding:8px">';
+  h += '<div class="flex-between" style="cursor:pointer" onclick="document.getElementById(\''+detailsId+'\').classList.toggle(\'hidden\')">';
+  h += '<div style="flex:1;min-width:0"><div style="font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(m.title) + '</div>';
+  h += '<div class="dim" style="font-size:10px">' + meetingTimeAgo(m.date) + (m.duration ? ' · ' + m.duration + 'min' : '') + (m.attendees && m.attendees.length ? ' · ' + m.attendees.length + ' attendees' : '') + '</div></div>';
+  if (m.recordingUrl) h += '<button class="btn-ghost btn-sm" style="font-size:10px;padding:2px 6px" onclick="event.stopPropagation();window.open(\''+esc(m.recordingUrl)+'\',\'_blank\')">View</button>';
+  h += '</div>';
+  h += '<div id="'+detailsId+'" class="hidden mt-8">';
+  if (m.summary) h += '<div style="font-size:12px;white-space:pre-wrap;color:var(--text);margin-bottom:6px">' + esc(m.summary) + '</div>';
+  if (m.actionItems && m.actionItems.length) {
+    h += '<div class="dim" style="font-size:10px;margin-bottom:2px">ACTION ITEMS</div>';
+    m.actionItems.forEach(a => {
+      const col = a.sevAssigned ? 'var(--yellow)' : 'var(--cyan)';
+      h += '<div style="font-size:11px;color:' + col + '">→ ' + esc(a.task) + ' <span class="dim">(' + esc(a.owner || '?') + ')</span></div>';
+    });
+  }
+  if (m.attendees && m.attendees.length) {
+    h += '<div class="dim mt-8" style="font-size:10px">ATTENDEES</div>';
+    h += '<div style="font-size:11px">' + m.attendees.map(a => esc(a.name || a.email)).join(', ') + '</div>';
+  }
+  if (m.transcript) {
+    const tId = detailsId + '-tr';
+    h += '<div class="mt-8"><button class="btn-ghost btn-sm" style="font-size:10px" onclick="document.getElementById(\''+tId+'\').classList.toggle(\'hidden\')">Toggle transcript</button>';
+    h += '<div id="'+tId+'" class="hidden mt-4" style="max-height:200px;overflow-y:auto;font-size:11px;color:var(--dim);white-space:pre-wrap;padding:8px;background:var(--bg);border-radius:4px">' + esc(m.transcript) + '</div></div>';
+  }
+  h += '</div></div>';
+  return h;
+}
+
+/** Unmatched Meetings panel — shown at the top of the Inbox tab. */
+function renderUnmatchedMeetingsSection() {
+  const items = state.unmatchedMeetings || [];
+  if (!items.length) return '';
+  let h = '<div class="card mb-16" style="border-color:rgba(249,115,22,0.4);background:linear-gradient(135deg,var(--bg3) 0%,var(--bg2) 100%)">';
+  h += '<div class="flex-center gap-8 mb-8"><span style="font-size:16px">🎙️</span>';
+  h += '<span style="font-weight:700;color:var(--orange)">Unmatched Meetings</span>';
+  h += '<span class="dim" style="font-size:11px">' + items.length + ' to triage</span></div>';
+  h += '<div class="dim mb-12" style="font-size:11px">These meetings have external attendees but didn\'t auto-match a client. Pick one to assign — or dismiss if it\'s not worth filing.</div>';
+  items.forEach((m, idx) => {
+    const rowId = 'um-' + idx;
+    h += '<div class="inner-card mb-8" style="padding:10px">';
+    h += '<div class="flex-between mb-4">';
+    h += '<div style="flex:1"><div style="font-weight:600;font-size:13px">' + esc(m.title) + '</div>';
+    h += '<div class="dim" style="font-size:11px">' + meetingTimeAgo(m.date) + (m.duration ? ' · ' + m.duration + 'min' : '');
+    if (m.suggestedClientName) h += ' · best guess: <b>' + esc(m.suggestedClientName) + '</b>';
+    h += '</div></div>';
+    if (m.recordingUrl) h += '<button class="btn-ghost btn-sm" style="font-size:10px;padding:2px 6px" onclick="window.open(\''+esc(m.recordingUrl)+'\',\'_blank\')">View</button>';
+    h += '</div>';
+    if (m.attendees && m.attendees.length) {
+      h += '<div class="dim" style="font-size:11px;margin-bottom:4px">' + m.attendees.filter(a => a.isExternal).map(a => esc(a.name || a.email)).join(', ') + '</div>';
+    }
+    if (m.summary) h += '<div style="font-size:11px;color:var(--dim);margin-bottom:8px;max-height:60px;overflow:hidden">' + esc(m.summary.slice(0, 240)) + (m.summary.length > 240 ? '…' : '') + '</div>';
+    h += '<div class="mb-8"><div class="dim" style="font-size:10px;margin-bottom:2px">NOTES (optional)</div>';
+    h += '<input class="input" placeholder="Add context before assigning…" value="'+esc(m.manualNotes||'')+'" onchange="updateUnmatchedNotes('+idx+',this.value)"></div>';
+    h += '<div class="flex gap-8 flex-wrap" style="align-items:center">';
+    h += '<select class="select" style="font-size:12px;padding:4px 8px" id="'+rowId+'-sel">';
+    h += '<option value="">Assign to client…</option>';
+    state.opportunities.forEach(o => { h += '<option value="'+esc(o.id)+'">'+esc(o.name)+'</option>'; });
+    h += '</select>';
+    h += '<button class="btn btn-sm" onclick="assignUnmatchedMeeting('+idx+',document.getElementById(\''+rowId+'-sel\').value)">Assign</button>';
+    h += '<button class="btn-ghost btn-sm" style="color:var(--cyan)" onclick="moveUnmatchedToKnowledge('+idx+')">→ Knowledge</button>';
+    h += '<button class="btn-ghost btn-sm btn-danger" onclick="dismissUnmatchedMeeting('+idx+')">Dismiss</button>';
+    h += '</div></div>';
+  });
+  h += '</div>';
+  return h;
+}
+
+function updateUnmatchedNotes(idx, value) {
+  if (!state.unmatchedMeetings || !state.unmatchedMeetings[idx]) return;
+  state.unmatchedMeetings[idx].manualNotes = value;
+  save();
+}
+
+function assignUnmatchedMeeting(idx, oppId) {
+  if (!oppId) { alert('Pick a client from the dropdown first.'); return; }
+  const items = state.unmatchedMeetings || []; if (!items[idx]) return;
+  const opp = state.opportunities.find(o => o.id === oppId); if (!opp) return;
+  const m = items[idx];
+  // Strip the unmatched-only fields; keep everything else as the meeting record.
+  const record = Object.assign({}, m);
+  delete record.suggestedClientName;
+  // Append manual notes into summary so they don't get lost.
+  if (m.manualNotes) record.summary = (record.summary ? record.summary + '\n\n' : '') + '[Manual notes] ' + m.manualNotes;
+  delete record.manualNotes;
+  if (!opp.meetings) opp.meetings = [];
+  if (!opp.meetings.some(x => x.fathomId === record.fathomId)) opp.meetings.unshift(record);
+  // Update lastContact if newer
+  if (!opp.lastContact || new Date(record.date) > new Date(opp.lastContact)) opp.lastContact = record.date;
+  // Add the meeting attendees as opportunity contacts so future meetings auto-match.
+  (record.attendees || []).filter(a => a.isExternal).forEach(a => {
+    if (!opp.contacts) opp.contacts = [];
+    if (!opp.contacts.includes(a.email)) opp.contacts.push(a.email);
+    if (!state.clientEmailMap) state.clientEmailMap = {};
+    state.clientEmailMap[a.email] = opp.id;
+  });
+  state.unmatchedMeetings.splice(idx, 1);
+  addXP(XP_VALUES.action, 'Meeting assigned');
+  save(); render();
+}
+
+function moveUnmatchedToKnowledge(idx) {
+  const items = state.unmatchedMeetings || []; if (!items[idx]) return;
+  const m = items[idx];
+  const entry = Object.assign({}, m, { type: 'other', knowledgeEntries: [] });
+  delete entry.suggestedClientName; delete entry.manualNotes;
+  if (!state.knowledgeBase) state.knowledgeBase = [];
+  if (!state.knowledgeBase.some(k => k.fathomId === entry.fathomId)) state.knowledgeBase.unshift(entry);
+  state.unmatchedMeetings.splice(idx, 1);
+  save(); render();
+}
+
+function dismissUnmatchedMeeting(idx) {
+  if (!confirm('Dismiss this meeting? It won\'t be filed anywhere.')) return;
+  state.unmatchedMeetings.splice(idx, 1);
+  save(); render();
+}
+
+// ===== KNOWLEDGE HUB =====
+let knowledgeFilter = '';
+function renderKnowledge() {
+  const items = (state.knowledgeBase || []).slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+  const meta = state.fathomMeta || {};
+  let h = '<h3 class="mb-4">Knowledge Hub</h3>';
+  h += '<p class="dim mb-12" style="font-size:13px">Searchable archive of advisory, internal, and training meetings. Per-client meetings live on each client card.</p>';
+
+  // Sync status
+  if (meta.lastWebhookAt) {
+    h += '<div class="dim mb-12" style="font-size:11px">Last Fathom sync: ' + meetingTimeAgo(meta.lastWebhookAt) + '</div>';
+  }
+
+  // Search box
+  h += '<div class="card mb-12"><input class="input" id="kb-search" placeholder="Search title, summary, attendees, topics…" value="'+esc(knowledgeFilter)+'" oninput="knowledgeFilter=this.value;render()"></div>';
+
+  if (!items.length) {
+    h += '<div class="text-center dim" style="padding:40px">No knowledge entries yet. Advisory and internal meetings will appear here automatically when Fathom syncs them.</div>';
+    return h;
+  }
+
+  const q = knowledgeFilter.trim().toLowerCase();
+  const filtered = q ? items.filter(m => {
+    const hay = [
+      m.title, m.summary, m.transcript,
+      (m.topics || []).join(' '), (m.tags || []).join(' '),
+      (m.attendees || []).map(a => (a.name||'') + ' ' + (a.email||'')).join(' '),
+    ].join(' ').toLowerCase();
+    return hay.includes(q);
+  }) : items;
+
+  if (q && !filtered.length) {
+    h += '<div class="text-center dim" style="padding:40px">No matches for "' + esc(q) + '".</div>';
+    return h;
+  }
+
+  // Group by month for readability
+  const groups = {};
+  filtered.forEach(m => {
+    const key = new Date(m.date).toLocaleDateString('en-AU', { month: 'long', year: 'numeric' });
+    (groups[key] = groups[key] || []).push(m);
+  });
+  Object.keys(groups).forEach(monthKey => {
+    h += '<div class="mb-12"><div class="label">' + esc(monthKey) + '</div>';
+    groups[monthKey].forEach(m => {
+      const typeColor = m.type === 'advisory' ? 'var(--cyan)' : m.type === 'training' ? 'var(--purple)' : m.type === 'internal' ? 'var(--gold)' : 'var(--dim)';
+      h += '<div class="card" style="border-left:3px solid '+typeColor+'">';
+      h += '<div class="flex-between mb-4"><span style="font-weight:600">' + esc(m.title) + '</span>' + tagHTML(m.type || 'other', typeColor) + '</div>';
+      h += renderMeetingRow(m, 'kb');
+      h += '<div class="flex gap-8 mt-8">';
+      h += '<button class="btn-ghost btn-sm" onclick="moveKnowledgeToClient('+ items.indexOf(m) +')">Reassign to client…</button>';
+      h += '<button class="btn-ghost btn-sm btn-danger" onclick="deleteKnowledgeEntry('+ items.indexOf(m) +')">Delete</button>';
+      h += '</div></div>';
+    });
+    h += '</div>';
+  });
+
+  return h;
+}
+
+function moveKnowledgeToClient(idx) {
+  const items = (state.knowledgeBase || []).slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+  const m = items[idx]; if (!m) return;
+  const names = state.opportunities.map((o, i) => (i + 1) + '. ' + o.name).join('\n');
+  const pick = prompt('Reassign "' + m.title + '" to which client?\n\n' + names + '\n\nEnter number:');
+  if (pick === null) return;
+  const oppIdx = parseInt(pick) - 1;
+  const opp = state.opportunities[oppIdx]; if (!opp) return;
+  if (!opp.meetings) opp.meetings = [];
+  if (!opp.meetings.some(x => x.fathomId === m.fathomId)) opp.meetings.unshift(m);
+  state.knowledgeBase = state.knowledgeBase.filter(k => k.fathomId !== m.fathomId);
+  if (!opp.lastContact || new Date(m.date) > new Date(opp.lastContact)) opp.lastContact = m.date;
+  save(); render();
+}
+
+function deleteKnowledgeEntry(idx) {
+  const items = (state.knowledgeBase || []).slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+  const m = items[idx]; if (!m) return;
+  if (!confirm('Delete "' + m.title + '" from the Knowledge Hub?')) return;
+  state.knowledgeBase = state.knowledgeBase.filter(k => k.fathomId !== m.fathomId);
+  save(); render();
+}
+
 function renderHistory() {
   let h = '<h3 class="mb-4">Progress History</h3><p class="dim mb-16" style="font-size:13px">Every weekly review saves a snapshot.</p>';
   if(!history.length) return h + '<div class="text-center dim" style="padding:40px">No snapshots yet.</div>';

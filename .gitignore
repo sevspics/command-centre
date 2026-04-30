@@ -1,0 +1,23 @@
+node_modules/
+.vercel/
+.vercel
+.env
+.env.local
+.env.*.local
+*.log
+.DS_Store
+
+# Backend lives on Vercel; keep this GitHub repo focused on the HTML app.
+api/
+scripts/
+package.json
+package-lock.json
+tsconfig.json
+vercel.json
+.vercelignore
+
+# Local backups
+sev-command-centre-backup-*.json
+
+# Claude
+.claude/
