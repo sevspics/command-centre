@@ -248,6 +248,9 @@ function defaultState() {
     sessions: [{ id: "abbey", name: "Abbey", package: "4-pack", price: 1200, sessionsTotal: 4, sessionsUsed: 3, notes: "3rd call done. 1 session remaining." }],
     commissions: [],
     debriefs: [],
+    // Email-classification learning: user-defined rules that re-route Apps-Script-tagged
+    // emails (e.g. "TikTok One brand pitches" → Noise). See applyEmailRules().
+    emailRules: [],
     // Fathom integration: meetings the webhook couldn't auto-match to a client
     unmatchedMeetings: [],
     // Fathom integration: advisory / internal / training calls (searchable hub)
@@ -282,7 +285,7 @@ function saveHistory() {
   }, 500);
 }
 function loadLocal() {
-  try { const s = localStorage.getItem(STORAGE_KEY); if (s) { state = JSON.parse(s); if (!state.sessions) state.sessions = defaultState().sessions; if (!state.commissions) state.commissions = []; if (!state.projects) state.projects = []; if (!state.debriefs) state.debriefs = []; if (!state.dismissedEmails) state.dismissedEmails = []; if (!state.clientEmailMap) state.clientEmailMap = {}; if (!state.unmatchedMeetings) state.unmatchedMeetings = []; if (!state.knowledgeBase) state.knowledgeBase = []; if (!state.fathomMeta) state.fathomMeta = {}; } else state = defaultState(); } catch(e) { state = defaultState(); }
+  try { const s = localStorage.getItem(STORAGE_KEY); if (s) { state = JSON.parse(s); if (!state.sessions) state.sessions = defaultState().sessions; if (!state.commissions) state.commissions = []; if (!state.projects) state.projects = []; if (!state.debriefs) state.debriefs = []; if (!state.dismissedEmails) state.dismissedEmails = []; if (!state.clientEmailMap) state.clientEmailMap = {}; if (!state.emailRules) state.emailRules = []; if (!state.unmatchedMeetings) state.unmatchedMeetings = []; if (!state.knowledgeBase) state.knowledgeBase = []; if (!state.fathomMeta) state.fathomMeta = {}; } else state = defaultState(); } catch(e) { state = defaultState(); }
   try { const h = localStorage.getItem(HISTORY_KEY); if (h) history = JSON.parse(h); } catch(e) {}
   ensureOppFields();
 }
@@ -297,7 +300,7 @@ function ensureOppFields() {
   }
 }
 function fixArrays(obj) {
-  const keys = ['opportunities','inbox','habits','sessions','commissions','waitingFor','somedayMaybe','projects','debriefs','dismissedEmails','unmatchedMeetings','knowledgeBase'];
+  const keys = ['opportunities','inbox','habits','sessions','commissions','waitingFor','somedayMaybe','projects','debriefs','dismissedEmails','emailRules','unmatchedMeetings','knowledgeBase'];
   keys.forEach(k => { if (obj[k] && !Array.isArray(obj[k])) obj[k] = Object.values(obj[k]); });
   if (obj.weeklyActions) {
     Object.keys(obj.weeklyActions).forEach(k => {
@@ -362,6 +365,7 @@ async function loadFromFirebase() {
     if (!state.debriefs) state.debriefs = [];
     if (!state.dismissedEmails) state.dismissedEmails = [];
     if (!state.clientEmailMap) state.clientEmailMap = {};
+    if (!state.emailRules) state.emailRules = [];
     if (!state.unmatchedMeetings) state.unmatchedMeetings = [];
     if (!state.knowledgeBase) state.knowledgeBase = [];
     if (!state.fathomMeta) state.fathomMeta = {};
@@ -521,6 +525,207 @@ const GMAIL_CATEGORIES = {
   'CMD/Noise':         { icon: '🔇', color: 'var(--grey)', label: 'Noise', desc: 'Newsletters & marketing' },
 };
 
+// ===== EMAIL CLASSIFICATION LEARNING =====
+// Each "🚫 Junk" click creates a rule. On every render we run the briefing
+// through the rules engine, which moves matched emails out of their original
+// category and into Noise (or hides them entirely). Rules stay editable in
+// the management panel at the bottom of the Gmail tab.
+
+function emailFromAddress(from) {
+  const m = (from || '').match(/<([^>]+)>/);
+  return (m ? m[1] : (from || '')).toLowerCase().trim();
+}
+
+function emailFromDomain(from) {
+  const addr = emailFromAddress(from);
+  const at = addr.indexOf('@');
+  return at >= 0 ? addr.slice(at + 1) : addr;
+}
+
+function emailFromName(from) {
+  return (from || '').split('<')[0].trim().replace(/"/g, '');
+}
+
+/** Build a sensible default rule from a single email — domain match + the
+ *  meaningful prefix of its subject. The user can broaden via the rules panel. */
+function buildDefaultRule(email) {
+  const subj = (email.subject || '').trim();
+  let subjectKey = '';
+  // If the subject has a natural separator that splits a template prefix from
+  // a per-email value (e.g. "You're a perfect fit: L'Oreal"), keep the prefix.
+  const colon = subj.indexOf(':');
+  const dash = subj.indexOf(' — ');
+  const splitAt = colon > 14 ? colon : (dash > 14 ? dash : -1);
+  subjectKey = splitAt > 0 ? subj.slice(0, splitAt).trim() : subj.slice(0, 50).trim();
+
+  const fromAddr = emailFromAddress(email.from);
+  const fromDom = emailFromDomain(email.from);
+  const fromName = emailFromName(email.from) || fromDom;
+
+  return {
+    id: uid(),
+    name: (subjectKey || fromName).slice(0, 80),
+    // Default to the FULL email address (conservative). User can switch to
+    // domain via the rules editor for broader matches.
+    fromDomainOrEmail: fromAddr || fromDom,
+    subjectContains: subjectKey,
+    action: 'noise', // 'noise' = reroute to Noise category; 'hide' = drop entirely
+    createdAt: new Date().toISOString(),
+    sourceThreadId: email.threadId,
+    sourceFrom: email.from,
+    sourceSubject: subj,
+    hitCount: 0,
+  };
+}
+
+function emailMatchesRule(email, rule) {
+  if (!email || !rule) return false;
+  if (rule.fromDomainOrEmail) {
+    const target = (email.from || '').toLowerCase();
+    if (!target.includes(rule.fromDomainOrEmail.toLowerCase())) return false;
+  }
+  if (rule.subjectContains) {
+    const subj = (email.subject || '').toLowerCase();
+    if (!subj.includes(rule.subjectContains.toLowerCase())) return false;
+  }
+  return Boolean(rule.fromDomainOrEmail || rule.subjectContains);
+}
+
+/** Returns a NEW gmailData object with rules applied. Does not mutate input.
+ *  Updates rule.hitCount on state.emailRules so users see how many emails
+ *  each rule has caught (saved on next state change). */
+function applyEmailRules(data) {
+  if (!data || !data.emails) return data;
+  const rules = state.emailRules || [];
+  if (!rules.length) return data;
+
+  // Deep-ish copy: shallow clone categories so we can re-bucket.
+  const out = Object.assign({}, data);
+  out.emails = {};
+  for (const cat of Object.keys(data.emails)) out.emails[cat] = [];
+  // Make sure Noise exists.
+  if (!out.emails['CMD/Noise']) out.emails['CMD/Noise'] = [];
+
+  // Reset per-render hit counters so the displayed numbers reflect *this*
+  // briefing, not the lifetime of the rule (which would be misleading).
+  rules.forEach(r => { r.hitCount = 0; });
+
+  for (const cat of Object.keys(data.emails)) {
+    for (const email of data.emails[cat] || []) {
+      const matched = rules.find(r => emailMatchesRule(email, r));
+      if (!matched) {
+        out.emails[cat].push(email);
+        continue;
+      }
+      matched.hitCount = (matched.hitCount || 0) + 1;
+      if (matched.action === 'hide') {
+        // Treat as dismissed for this session (not persisted into dismissedEmails).
+        continue;
+      }
+      // Default: move to Noise.
+      out.emails['CMD/Noise'].push(Object.assign({}, email, {
+        _ruleApplied: matched.id,
+        _ruleName: matched.name,
+      }));
+    }
+  }
+  return out;
+}
+
+/** One-click junk from any email in the Gmail tab. Auto-creates a conservative
+ *  rule, fires a best-effort "mark as read" against the Apps Script, and
+ *  re-renders. The user can refine the rule in the management panel. */
+function gmailMarkJunk(threadId, subjectRaw, fromRaw) {
+  if (!gmailData || !gmailData.emails) return;
+  // Find the actual email object so we can build the rule from authoritative data.
+  let target = null;
+  for (const cat of Object.keys(gmailData.emails)) {
+    target = (gmailData.emails[cat] || []).find(e => e.threadId === threadId);
+    if (target) break;
+  }
+  if (!target) target = { threadId, subject: subjectRaw, from: fromRaw };
+
+  const rule = buildDefaultRule(target);
+  if (!state.emailRules) state.emailRules = [];
+
+  // De-dupe: if a rule with the same from + subject prefix already exists, skip.
+  const dupe = state.emailRules.find(r =>
+    (r.fromDomainOrEmail || '').toLowerCase() === (rule.fromDomainOrEmail || '').toLowerCase() &&
+    (r.subjectContains || '').toLowerCase() === (rule.subjectContains || '').toLowerCase()
+  );
+  if (!dupe) state.emailRules.unshift(rule);
+
+  // Best-effort: ask the Apps Script to mark the source thread as read in Gmail.
+  // If the script doesn't implement this endpoint it'll just no-op.
+  markGmailReadAttempt(threadId);
+
+  addXP(XP_VALUES.action, 'Email rule created');
+  save();
+  render();
+}
+
+/** Best-effort POST to the Apps Script asking it to mark a thread as read.
+ *  If the script returns 404 or doesn't expose the endpoint, we swallow the
+ *  error — the rule still hides the email locally either way. */
+async function markGmailReadAttempt(threadId) {
+  if (!GMAIL_SCRIPT_URL || !threadId) return;
+  try {
+    await fetch(GMAIL_SCRIPT_URL + '?action=markRead&threadId=' + encodeURIComponent(threadId), {
+      method: 'GET', mode: 'no-cors',
+    });
+  } catch (e) { /* silent — Apps Script may not handle this action */ }
+}
+
+function deleteEmailRule(id) {
+  state.emailRules = (state.emailRules || []).filter(r => r.id !== id);
+  save(); render();
+}
+
+function editEmailRule(id) {
+  const r = (state.emailRules || []).find(x => x.id === id); if (!r) return;
+  const fromEdit = prompt('Match emails where FROM contains (full email or just domain like "tiktok.com"):', r.fromDomainOrEmail || '');
+  if (fromEdit === null) return;
+  const subjEdit = prompt('AND where subject contains (leave blank for any):', r.subjectContains || '');
+  if (subjEdit === null) return;
+  r.fromDomainOrEmail = fromEdit.trim();
+  r.subjectContains = subjEdit.trim();
+  r.name = (r.subjectContains || r.fromDomainOrEmail || 'Rule').slice(0, 80);
+  save(); render();
+}
+
+function renderEmailRulesSection() {
+  const rules = state.emailRules || [];
+  let h = '<div class="card mb-12" style="border-color:rgba(125,133,144,0.3)">';
+  h += '<div class="flex-between mb-8" style="cursor:pointer" onclick="document.getElementById(\'email-rules-list\').classList.toggle(\'hidden\')">';
+  h += '<div class="flex-center gap-8"><span style="font-size:14px">📋</span>';
+  h += '<span style="font-weight:700;color:var(--dim)">Email Rules</span>';
+  h += '<span class="dim" style="font-size:11px">' + rules.length + '</span></div>';
+  h += '<span class="dim" style="font-size:11px">tap to ' + (rules.length ? 'manage' : 'learn more') + '</span></div>';
+  h += '<div id="email-rules-list" class="hidden">';
+  if (!rules.length) {
+    h += '<div class="dim" style="font-size:11px">Click <b>🚫 Junk</b> on any email to teach the system to auto-reroute similar future emails to Noise. You can edit or remove rules here.</div>';
+  } else {
+    h += '<div class="dim mb-8" style="font-size:11px">Matching emails are automatically moved from their original category to Noise. Hits below are for the current briefing only.</div>';
+    rules.forEach(r => {
+      h += '<div class="inner-card mb-4" style="padding:8px;font-size:12px">';
+      h += '<div class="flex-between"><span style="font-weight:600;font-size:12px">' + esc(r.name) + '</span>';
+      h += '<div class="flex gap-4">';
+      h += '<button class="btn-ghost btn-sm" style="font-size:10px;padding:2px 6px" onclick="editEmailRule(\'' + esc(r.id) + '\')">Edit</button>';
+      h += '<button class="btn-icon" style="color:var(--red)" onclick="deleteEmailRule(\'' + esc(r.id) + '\')" title="Delete rule">×</button>';
+      h += '</div></div>';
+      h += '<div class="dim" style="font-size:11px;margin-top:2px">';
+      if (r.fromDomainOrEmail) h += 'From: <b>' + esc(r.fromDomainOrEmail) + '</b>';
+      if (r.fromDomainOrEmail && r.subjectContains) h += ' &middot; ';
+      if (r.subjectContains) h += 'Subject: <b>' + esc(r.subjectContains) + '</b>';
+      h += '</div>';
+      if (r.hitCount > 0) h += '<div style="font-size:10px;color:var(--gold);margin-top:2px">Caught ' + r.hitCount + ' email' + (r.hitCount === 1 ? '' : 's') + ' in this briefing</div>';
+      h += '</div>';
+    });
+  }
+  h += '</div></div>';
+  return h;
+}
+
 async function fetchGmailBriefing(hours) {
   if (!GMAIL_SCRIPT_URL) { gmailError = 'Set GMAIL_SCRIPT_URL in the source code.'; render(); return; }
   gmailLoading = true; gmailError = null; render();
@@ -674,6 +879,12 @@ function findDealForSender(fromEmail) {
 
 function renderGmail() {
   let h = '';
+
+  // Apply user-defined classification rules to the briefing BEFORE we render
+  // any of it. This re-routes matched emails (e.g. "TikTok One brand pitches")
+  // out of Opportunities/Actions and into Noise. Rule hit counts shown in the
+  // management panel are computed during this call.
+  if (gmailData) gmailData = applyEmailRules(gmailData);
 
   // Header
   h += '<div class="card card-accent">';
@@ -875,13 +1086,20 @@ function renderGmail() {
         if (!isNoise) h += '<button class="btn-ghost btn-sm" onclick="gmailSendToInbox(\'' + esc(email.subject.replace(/'/g, "\\'")) + '\',\'' + esc(fromName.replace(/'/g, "\\'")) + '\')" title="Add to GTD Inbox">→ Inbox</button>';
         if (cat === 'CMD/Opportunities') h += '<button class="btn-ghost btn-sm" style="color:var(--green);border-color:rgba(34,197,94,0.3)" onclick="gmailAddToPipeline(\'' + esc(email.subject.replace(/'/g, "\\'")) + '\',\'' + esc(email.from.replace(/'/g, "\\'")) + '\')" title="Add to Deals pipeline">→ Pipeline</button>';
         if (showLinkBtn) h += '<button class="btn-ghost btn-sm" style="color:var(--cyan);border-color:rgba(6,182,212,0.3);font-size:10px" onclick="showLinkToDealPicker(\'' + esc(email.from.replace(/'/g, "\\'")) + '\')" title="Link sender to a deal">🔗 Deal</button>';
-        h += '<button class="dismiss-btn" onclick="event.stopPropagation();dismissEmail(\'' + esc(email.threadId) + '\')" title="Dismiss">✕</button>';
+        // Junk: one-click learning rule + best-effort mark-as-read in Gmail.
+        // Hide on Noise (already-junked) since the rule already moved it here.
+        if (!isNoise) h += '<button class="btn-ghost btn-sm" style="color:var(--orange);border-color:rgba(249,115,22,0.3);font-size:10px" onclick="event.stopPropagation();gmailMarkJunk(\'' + esc(email.threadId) + '\',\'' + esc((email.subject||'').replace(/'/g, "\\'")) + '\',\'' + esc((email.from||'').replace(/'/g, "\\'")) + '\')" title="Junk: create rule + reroute similar emails to Noise">🚫 Junk</button>';
+        h += '<button class="dismiss-btn" onclick="event.stopPropagation();dismissEmail(\'' + esc(email.threadId) + '\')" title="Dismiss this one (no rule)">✕</button>';
         h += '</div></div></div>';
       });
       h += '</div>';
     }
     h += '</div>';
   });
+
+  // Email rules management (collapsible) — sits above the time filter so
+  // it's always findable but doesn't dominate when you're skimming the briefing.
+  h += renderEmailRulesSection();
 
   // Time filter buttons
   h += '<div class="card" style="text-align:center">';
