@@ -1590,6 +1590,68 @@ function meetingsSorted(meetings) {
 }
 
 /** Pull the latest meeting whose suggestedStage advances past the opp's current stage. */
+/**
+ * Fathom auto-titles many recordings as "Impromptu Zoom Meeting" or similar
+ * generic strings. To make scanning the Knowledge Hub possible at a glance,
+ * we infer a short hint (other-party name) from attendees → action item
+ * assignees → summary, and append it. Storage stays untouched (still the
+ * original Fathom title); this is render-only.
+ */
+function smartMeetingTitle(m) {
+  if (!m || !m.title) return 'Untitled';
+  const t = String(m.title).trim();
+
+  // Patterns Fathom uses when no real meeting title was set.
+  const isGeneric =
+    /^impromptu\b/i.test(t) ||                                // Impromptu Zoom/Google Meet/etc Meeting
+    /^(catch.?up|coffee with|meeting w\/?|sev[' ]?s? zoom)\s*sev?$/i.test(t) ||
+    /^untitled/i.test(t) ||
+    /^new\s+meeting/i.test(t);
+
+  if (!isGeneric) return t;
+
+  const hint = inferMeetingHint(m);
+  if (!hint) return t;
+
+  // Strip the boring "Meeting" suffix to keep the prefix tight.
+  const tag = t.replace(/\s*Meeting\s*$/i, '').trim();
+  return hint + ' (' + tag + ')';
+}
+
+function inferMeetingHint(m) {
+  const isSev = (s) => /\bsev(a|o)?\b|\bseva\s+mozhaev\b/i.test(s || '');
+
+  // 1. External attendees with a real name (live webhook payloads).
+  const att = (m.attendees || [])
+    .filter(a => a && a.isExternal && (a.name || '').trim())
+    .map(a => a.name.trim())
+    .filter(n => !isSev(n));
+  if (att.length) return att.slice(0, 2).join(', ');
+
+  // 2. Action item assignees that aren't Sev (rich for backfilled data).
+  const owners = Array.from(new Set(
+    (m.actionItems || [])
+      .map(a => (a && a.owner || '').trim())
+      .filter(o => o && !isSev(o))
+  ));
+  if (owners.length) return owners.slice(0, 2).join(', ');
+
+  // 3. First proper noun in the summary's "Meeting Purpose" line.
+  const summary = m.summary || '';
+  if (summary) {
+    const purposeBlock = summary.match(/##?\s*Meeting Purpose[\s\S]{0,400}/i);
+    const haystack = (purposeBlock ? purposeBlock[0] : summary).slice(0, 600);
+    // Skip common boilerplate words that can start with a capital.
+    const STOP = /^(Meeting|Purpose|Key|Takeaways|To|For|The|This|It|Sev|Seva|Sevo|And|A|An|We|Our|Their|Was|With|From)$/;
+    const candidates = haystack.match(/\b[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]+)?\b/g) || [];
+    for (const c of candidates) {
+      const first = c.split(/\s+/)[0];
+      if (!STOP.test(first) && !isSev(c)) return c;
+    }
+  }
+  return null;
+}
+
 function latestStageSuggestion(opp) {
   if (!opp.meetings || !opp.meetings.length) return null;
   const sorted = meetingsSorted(opp.meetings);
@@ -1655,7 +1717,7 @@ function renderMeetingRow(m, contextId) {
   const detailsId = 'mtg-' + (contextId || 'k') + '-' + m.fathomId.replace(/[^a-zA-Z0-9]/g, '');
   let h = '<div class="inner-card mb-4" style="padding:8px">';
   h += '<div class="flex-between" style="cursor:pointer" onclick="document.getElementById(\''+detailsId+'\').classList.toggle(\'hidden\')">';
-  h += '<div style="flex:1;min-width:0"><div style="font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(m.title) + '</div>';
+  h += '<div style="flex:1;min-width:0"><div style="font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(smartMeetingTitle(m)) + '</div>';
   h += '<div class="dim" style="font-size:10px">' + meetingTimeAgo(m.date) + (m.duration ? ' · ' + m.duration + 'min' : '') + (m.attendees && m.attendees.length ? ' · ' + m.attendees.length + ' attendees' : '') + '</div></div>';
   if (m.recordingUrl) h += '<button class="btn-ghost btn-sm" style="font-size:10px;padding:2px 6px" onclick="event.stopPropagation();window.open(\''+esc(m.recordingUrl)+'\',\'_blank\')">View</button>';
   h += '</div>';
@@ -1694,7 +1756,7 @@ function renderUnmatchedMeetingsSection() {
     const rowId = 'um-' + idx;
     h += '<div class="inner-card mb-8" style="padding:10px">';
     h += '<div class="flex-between mb-4">';
-    h += '<div style="flex:1"><div style="font-weight:600;font-size:13px">' + esc(m.title) + '</div>';
+    h += '<div style="flex:1"><div style="font-weight:600;font-size:13px">' + esc(smartMeetingTitle(m)) + '</div>';
     h += '<div class="dim" style="font-size:11px">' + meetingTimeAgo(m.date) + (m.duration ? ' · ' + m.duration + 'min' : '');
     if (m.suggestedClientName) h += ' · best guess: <b>' + esc(m.suggestedClientName) + '</b>';
     h += '</div></div>';
@@ -1817,7 +1879,7 @@ function renderKnowledge() {
     groups[monthKey].forEach(m => {
       const typeColor = m.type === 'advisory' ? 'var(--cyan)' : m.type === 'training' ? 'var(--purple)' : m.type === 'internal' ? 'var(--gold)' : 'var(--dim)';
       h += '<div class="card" style="border-left:3px solid '+typeColor+'">';
-      h += '<div class="flex-between mb-4"><span style="font-weight:600">' + esc(m.title) + '</span>' + tagHTML(m.type || 'other', typeColor) + '</div>';
+      h += '<div class="flex-between mb-4"><span style="font-weight:600">' + esc(smartMeetingTitle(m)) + '</span>' + tagHTML(m.type || 'other', typeColor) + '</div>';
       h += renderMeetingRow(m, 'kb');
       h += '<div class="flex gap-8 mt-8">';
       h += '<button class="btn-ghost btn-sm" onclick="moveKnowledgeToClient('+ items.indexOf(m) +')">Reassign to client…</button>';
